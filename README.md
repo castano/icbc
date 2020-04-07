@@ -1,2 +1,2 @@
-# icbc
-High Quality BC1 encoder
+# IC-BC
+A High Quality BC1 encoder
