@@ -1,4 +1,4 @@
-# ICBC - A High Quality BC1 encoder
+# ICBC - A High Quality BC1 Encoder
 This is the BC1 texture block encoder used by [NVTT](https://github.com/castano/nvidia-texture-tools), extracted as an easy to use single header file library.
 
 It implements several algorithms: 
