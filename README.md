@@ -1,4 +1,4 @@
-# ICBC - A High Quality BC1 encoder
+# ICBC - A High Quality BC1 Encoder
 This is the BC1 texture block encoder used by [NVTT](https://github.com/castano/nvidia-texture-tools), extracted as an easy to use single header file library.
 
 It implements several algorithms: 
@@ -13,7 +13,7 @@ There are also some experimental algorithms that are not enabled:
 - Exhaustive cluster fit with pre-computed factors for every cluster configuration. As in [High Quality DXT Compression using CUDA](https://developer.download.nvidia.com/compute/cuda/1.1-Beta/x86_website/projects/dxtc/doc/cuda_dxtc.pdf)
 - K-means cluster fit.
 
-Even though NVTT contained some fast compressors, the focus was to produce very high quality textures, and for a long time this was the highest quality open-source compressor available.
+Even though NVTT contained some fast compressors, these were not particularly optimized. The focus was on producing very high quality textures, and for a long time this was the highest quality open-source compressor available.
 
-Today it has probably been superseded by Rich Geldreich's [RGBCX](https://github.com/richgel999/bc7enc/blob/master/rgbcx.h), which I hope becomes a suitable replacement for this code in almost all scenarios.
+Today it has been superseded by Rich Geldreich's [RGBCX](https://github.com/richgel999/bc7enc/blob/master/rgbcx.h) library, which I hope becomes a suitable replacement for this code in almost all scenarios.
 
