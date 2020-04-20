@@ -19,7 +19,7 @@ Today it has been superseded by Rich Geldreich's [RGBCX](https://github.com/rich
 
 ## Results
 
-The following chart shows the average PSNR results of different BC1 compressors on the Kodim and Waterloo image sets.
+The following chart shows the average PSNR of different BC1 compressors and different configurations on the [Kodim](http://r0k.us/graphics/kodak/) and [Waterloo](http://links.uwaterloo.ca/Repository.html) image sets plotted against the time it took to encode them:
 
 ![kodim-chart](kodim-chart.png "PSNR chart on Kodim+Waterloo sets.")
 
