@@ -567,13 +567,13 @@ private:
     uint m_count;
 
 #if ICBC_USE_SIMD
-    ICBC_ALIGN_16 SimdVector m_weighted[16];    // color | weight
-    SimdVector m_metric;                        // vec3
-    SimdVector m_metricSqr;                     // vec3
-    SimdVector m_xxsum;                         // color | weight
-    SimdVector m_xsum;                          // color | weight (wsum)
+    ICBC_ALIGN_16 SimdVector m_colors[16];  // color | weight
+    SimdVector m_metric;                    // vec3
+    SimdVector m_metricSqr;                 // vec3
+    SimdVector m_xxsum;                     // color | weight
+    SimdVector m_xsum;                      // color | weight (wsum)
 #else
-    Vector3 m_weighted[16];
+    Vector3 m_colors[16];
     float m_weights[16];
     Vector3 m_metric;
     Vector3 m_metricSqr;
@@ -743,13 +743,13 @@ void ClusterFit::setColorSet(const Vector3 * colors, const float * weights, int 
         ICBC_ALIGN_16 Vector4 tmp;
         tmp.xyz = colors[p];
         tmp.w = 1;
-        m_weighted[i] = SimdVector(&tmp.x) * SimdVector(weights[p]);
-        m_xxsum += m_weighted[i] * m_weighted[i];
-        m_xsum += m_weighted[i];
+        m_colors[i] = SimdVector(&tmp.x) * SimdVector(weights[p]);
+        m_xxsum += m_colors[i] * m_colors[i];
+        m_xsum += m_colors[i];
 #else
-        m_weighted[i] = colors[p] * weights[p];
-        m_xxsum += m_weighted[i] * m_weighted[i];
-        m_xsum += m_weighted[i];
+        m_colors[i] = colors[p] * weights[p];
+        m_xxsum += m_colors[i] * m_colors[i];
+        m_xsum += m_colors[i];
         m_weights[i] = weights[p];
         m_wsum += m_weights[i];
 #endif
@@ -807,13 +807,13 @@ void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
         ICBC_ALIGN_16 Vector4 tmp;
         tmp.xyz = colors[p].xyz;
         tmp.w = 1;
-        m_weighted[i] = SimdVector(&tmp.x);
-        m_xxsum += m_weighted[i] * m_weighted[i];
-        m_xsum += m_weighted[i];
+        m_colors[i] = SimdVector(&tmp.x);
+        m_xxsum += m_colors[i] * m_colors[i];
+        m_xsum += m_colors[i];
 #else
-        m_weighted[i] = colors[p].xyz;
-        m_xxsum += m_weighted[i] * m_weighted[i];
-        m_xsum += m_weighted[i];
+        m_colors[i] = colors[p].xyz;
+        m_xxsum += m_colors[i] * m_colors[i];
+        m_xsum += m_colors[i];
         m_weights[i] = 1.0f;
         m_wsum += m_weights[i];
 #endif
@@ -841,10 +841,15 @@ static void init_lsqr_tables() {
             for (int c2 = 0; c2 <= 16 - c0 - c1; c2++, i++) {
                 int c3 = 16 - c0 - c1 - c2;
 
-                int alpha2_sum = c0 * 9 + c1 * 4 + c2;
-                int beta2_sum = c3 * 9 + c2 * 4 + c1;
-                int alphabeta_sum = (c1 + c2) * 2;
-                float factor = float(9.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
+                //int alpha2_sum = c0 * 9 + c1 * 4 + c2;
+                //int beta2_sum = c3 * 9 + c2 * 4 + c1;
+                //int alphabeta_sum = (c1 + c2) * 2;
+                //float factor = float(9.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
+
+                float alpha2_sum = c0 + c1 * (4.0f / 9.0f) + c2 * (1.0f / 9.0f);
+                float beta2_sum = c3 + c2 * (4.0f / 9.0f) + c1 * (1.0f / 9.0f);
+                float alphabeta_sum = (c1 + c2) * (2.0f / 9.0f);
+                float factor = float(1.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
 
                 s_fourElement[i].alpha2_sum = (float)alpha2_sum;
                 s_fourElement[i].beta2_sum = (float)beta2_sum;
@@ -859,10 +864,15 @@ static void init_lsqr_tables() {
         for (int c1 = 0; c1 <= 16 - c0; c1++, i++) {
             int c2 = 16 - c1 - c0;
 
-            int alpha2_sum = 4 * c0 + c1;
-            int beta2_sum = 4 * c2 + c1;
-            int alphabeta_sum = c1;
-            float factor = float(4.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
+            //int alpha2_sum = 4 * c0 + c1;
+            //int beta2_sum = 4 * c2 + c1;
+            //int alphabeta_sum = c1;
+            //float factor = float(4.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
+
+            float alpha2_sum = c0 + c1 * 0.25f;
+            float beta2_sum = c2 + c1 * 0.25f;
+            float alphabeta_sum = c1 * 0.25f;
+            float factor = float(1.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
 
             s_threeElement[i].alpha2_sum = (float)alpha2_sum;
             s_threeElement[i].beta2_sum = (float)beta2_sum;
@@ -945,10 +955,10 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
                 bestend = b;
             }
 
-            x1 += m_weighted[c0 + c1];
+            x1 += m_colors[c0 + c1];
         }
 
-        x0 += m_weighted[c0];
+        x0 += m_colors[c0];
     }
 
     *start = beststart.toVector3();
@@ -1032,13 +1042,13 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
                     bestend = b;
                 }
 
-                x2 += m_weighted[c0 + c1 + c2];
+                x2 += m_colors[c0 + c1 + c2];
             }
 
-            x1 += m_weighted[c0 + c1];
+            x1 += m_colors[c0 + c1];
         }
 
-        x0 += m_weighted[c0];
+        x0 += m_colors[c0];
     }
 
     *start = beststart.toVector3();
@@ -1108,10 +1118,10 @@ void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
                 bestend = b;
             }
 
-            x1 += m_weighted[c0 + c1];
+            x1 += m_colors[c0 + c1];
         }
 
-        x0 += m_weighted[c0];
+        x0 += m_colors[c0];
     }
 
     *start = beststart.toVector3();
@@ -1185,13 +1195,13 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
                     bestend = b;
                 }
 
-                x2 += m_weighted[c0 + c1 + c2];
+                x2 += m_colors[c0 + c1 + c2];
             }
 
-            x1 += m_weighted[c0 + c1];
+            x1 += m_colors[c0 + c1];
         }
 
-        x0 += m_weighted[c0];
+        x0 += m_colors[c0];
     }
 
     *start = beststart.toVector3();
@@ -1276,11 +1286,11 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
                 bestend = b;
             }
 
-            x1 += m_weighted[c0 + c1];
+            x1 += m_colors[c0 + c1];
             w1 += m_weights[c0 + c1];
         }
 
-        x0 += m_weighted[c0];
+        x0 += m_colors[c0];
         w0 += m_weights[c0];
     }
 
@@ -1354,15 +1364,15 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
                     bestend = b;
                 }
 
-                x2 += m_weighted[c0 + c1 + c2];
+                x2 += m_colors[c0 + c1 + c2];
                 w2 += m_weights[c0 + c1 + c2];
             }
 
-            x1 += m_weighted[c0 + c1];
+            x1 += m_colors[c0 + c1];
             w1 += m_weights[c0 + c1];
         }
 
-        x0 += m_weighted[c0];
+        x0 += m_colors[c0];
         w0 += m_weights[c0];
     }
 
@@ -1384,13 +1394,11 @@ void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
     float besterror = FLT_MAX;
 
     Vector3 x0 = { 0.0f };
-    float w0 = 0.0f;
 
     // check all possible clusters for this total order
     for (uint c0 = 0, i = 0; c0 <= count; c0++)
     {
         Vector3 x1 = { 0.0f };
-        float w1 = 0.0f;
 
         for (uint c1 = 0; c1 <= count - c0; c1++, i++)
         {
@@ -1402,8 +1410,8 @@ void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
             Vector3 const alphax_sum = x0 + x1 * 0.5f;
             Vector3 const betax_sum = m_xsum - alphax_sum;
 
-            Vector3 a = (alphax_sum*beta2_sum - betax_sum * alphabeta_sum) * factor;
-            Vector3 b = (betax_sum*alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+            Vector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
+            Vector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
 
             // clamp to the grid
             a = saturate(a);
@@ -1430,12 +1438,10 @@ void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
                 bestend = b;
             }
 
-            x1 += m_weighted[c0 + c1];
-            w1 += m_weights[c0 + c1];
+            x1 += m_colors[c0 + c1];
         }
 
-        x0 += m_weighted[c0];
-        w0 += m_weights[c0];
+        x0 += m_colors[c0];
     }
 
     *start = beststart;
@@ -1454,18 +1460,15 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
     float besterror = FLT_MAX;
 
     Vector3 x0 = { 0.0f };
-    float w0 = 0.0f;
 
     // check all possible clusters for this total order
     for (uint c0 = 0, i = 0; c0 <= count; c0++)
     {
         Vector3 x1 = { 0.0f };
-        float w1 = 0.0f;
 
         for (uint c1 = 0; c1 <= count - c0; c1++)
         {
             Vector3 x2 = { 0.0f };
-            float w2 = 0.0f;
 
             for (uint c2 = 0; c2 <= count - c0 - c1; c2++, i++)
             {
@@ -1477,8 +1480,8 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
                 Vector3 const alphax_sum = x0 + x1 * (2.0f / 3.0f) + x2 * (1.0f / 3.0f);
                 Vector3 const betax_sum = m_xsum - alphax_sum;
 
-                Vector3 a = (alphax_sum*beta2_sum - betax_sum * alphabeta_sum)*factor;
-                Vector3 b = (betax_sum*alpha2_sum - alphax_sum * alphabeta_sum)*factor;
+                Vector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
+                Vector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
 
                 // clamp to the grid
                 a = saturate(a);
@@ -1506,16 +1509,13 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
                     bestend = b;
                 }
 
-                x2 += m_weighted[c0 + c1 + c2];
-                w2 += m_weights[c0 + c1 + c2];
+                x2 += m_colors[c0 + c1 + c2];
             }
 
-            x1 += m_weighted[c0 + c1];
-            w1 += m_weights[c0 + c1];
+            x1 += m_colors[c0 + c1];
         }
 
-        x0 += m_weighted[c0];
-        w0 += m_weights[c0];
+        x0 += m_colors[c0];
     }
 
     *start = beststart;
@@ -2278,57 +2278,53 @@ static float compress_dxt1_bounding_box_exhaustive(const Vector4 input_colors[16
 static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, BlockDXT1 * output)
 {
     ClusterFit fit;
-    
 #if ICBC_FAST_CLUSTER_FIT
-    if (count > 15) {
-        fit.setColorSet(input_colors, color_weights);
+    if (count > 15) fit.setColorSet(input_colors, color_weights);
+    else
+#endif
+    fit.setColorSet(colors, weights, count, color_weights);
 
-        // start & end are in [0, 1] range.
-        Vector3 start, end;
-        fit.fastCompress4(&start, &end);
+    // start & end are in [0, 1] range.
+    Vector3 start, end;
+#if ICBC_FAST_CLUSTER_FIT
+    if (count > 15) fit.fastCompress4(&start, &end);
+    else
+#endif
+    fit.compress4(&start, &end);
 
-        if (three_color_mode && fit.fastCompress3(&start, &end)) {
-            output_block3(input_colors, color_weights, start, end, output);
+    output_block4(input_colors, color_weights, start, end, output);
+
+    float best_error = evaluate_mse(input_colors, input_weights, color_weights, output);
+
+    if (three_color_mode) {
+        if (fit.anyBlack) {
+            Vector3 tmp_colors[16];
+            float tmp_weights[16];
+            int tmp_count = skip_blacks(colors, weights, count, tmp_colors, tmp_weights);
+            fit.setColorSet(tmp_colors, tmp_weights, tmp_count, color_weights);
+
+            fit.compress3(&start, &end);
         }
         else {
-            output_block4(input_colors, color_weights, start, end, output);
-        }
-    }
-    else 
-#endif
-    {
-        fit.setColorSet(colors, weights, count, color_weights);
-
-        // start & end are in [0, 1] range.
-        Vector3 start, end;
-        fit.compress4(&start, &end);
-
-        output_block4(input_colors, color_weights, start, end, output);
-
-        float best_error = evaluate_mse(input_colors, input_weights, color_weights, output);
-
-        if (three_color_mode) {
-            if (fit.anyBlack) {
-                Vector3 tmp_colors[16];
-                float tmp_weights[16];
-                int tmp_count = skip_blacks(colors, weights, count, tmp_colors, tmp_weights);
-                fit.setColorSet(tmp_colors, tmp_weights, tmp_count, color_weights);
-            }
-
-            BlockDXT1 three_color_block;
+        #if ICBC_FAST_CLUSTER_FIT
+            if (count > 15) fit.fastCompress3(&start, &end);
+            else
+        #endif
             fit.compress3(&start, &end);
-            output_block3(input_colors, color_weights, start, end, &three_color_block);
-
-            float three_color_error = evaluate_mse(input_colors, input_weights, color_weights, &three_color_block);
-
-            if (three_color_error < best_error) {
-                best_error = three_color_error;
-                *output = three_color_block;
-            }
         }
 
-        return best_error;
+        BlockDXT1 three_color_block;
+        output_block3(input_colors, color_weights, start, end, &three_color_block);
+
+        float three_color_error = evaluate_mse(input_colors, input_weights, color_weights, &three_color_block);
+
+        if (three_color_error < best_error) {
+            best_error = three_color_error;
+            *output = three_color_block;
+        }
     }
+
+    return best_error;
 }
 
 
