@@ -17,3 +17,19 @@ Even though NVTT contained some fast compressors, these were not particularly op
 
 Today it has been superseded by Rich Geldreich's [RGBCX](https://github.com/richgel999/bc7enc/blob/master/rgbcx.h) library, which I hope becomes a suitable replacement for this code in almost all scenarios.
 
+## Results
+
+The following chart shows the average PSNR results of different BC1 compressors on the Kodim and Waterloo image sets.
+
+![kodim-chart](kodim-chart.png "PSNR chart on Kodim+Waterloo sets.")
+
+- stb is stb_dxt version 1.09 with various improvements that Rich and I have proposed.
+- RGBCx is version 1.12 with `allow_3color` and `use_transparent_texels_for_black` enabled.
+- squish is version 1.15
+- amd is AMD's CMP_Core V3.2.4691
+- ICBC is version 1.0 compiled with SSE2 support and `ICBC_FAST_CLUSTER_FIT` enabled.
+
+This other chart shows similar results, on a texture set from my employer:
+
+![roblox-chart](roblox-chart.png "PSNR chart on Kodim+Waterloo sets.")
+
