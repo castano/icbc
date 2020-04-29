@@ -25,18 +25,27 @@ namespace icbc {
 #ifdef ICBC_IMPLEMENTATION
 
 #ifndef ICBC_USE_SSE
-#define ICBC_USE_SSE 2
+#define ICBC_USE_SSE 2  // 0=scalar, 1=SSE, 2=SSE2
+#endif
+
+#ifndef ICBC_USE_AVX
+#define ICBC_USE_AVX 2  // 0=scalar, 1=AVX, 2=AVX2
+#if ICBC_USE_AVX == 2
+#define ICBC_USE_AVX2_PERMUTE 0
+#define ICBC_USE_AVX2_GATHER 1
+#endif
 #endif
 
 #ifndef ICBC_DECODER
 #define ICBC_DECODER 0       // 0 = d3d10, 1 = d3d9, 2 = nvidia, 3 = amd
 #endif
 
-#define ICBC_USE_SIMD ICBC_USE_SSE
 
 // Some testing knobs:
 #define ICBC_FAST_CLUSTER_FIT 0     // This ignores input weights for a moderate speedup.
 #define ICBC_PERFECT_ROUND 0        // Enable perfect rounding in scalar code path only.
+#define ICBC_USE_SAT 0              // Use summed area tables.
+#define ICBC_SAT_INC 1
 
 #include <stdint.h>
 #include <string.h> // memset
@@ -44,8 +53,12 @@ namespace icbc {
 #include <float.h>  // FLT_MAX
 
 #ifndef ICBC_ASSERT
+#if _DEBUG
 #define ICBC_ASSERT assert
 #include <assert.h>
+#else
+#define ICBC_ASSERT(x)
+#endif
 #endif
 
 namespace icbc {
@@ -225,7 +238,7 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 #endif
 #endif
 
-#if ICBC_USE_SIMD
+#if ICBC_USE_SSE
 
 #include <xmmintrin.h>
 #include <emmintrin.h>
@@ -390,7 +403,239 @@ SIMD_INLINE bool compareAnyLessThan(SimdVector::Arg left, SimdVector::Arg right)
     return value != 0;
 }
 
-#endif // ICBC_USE_SIMD
+#endif // ICBC_USE_SSE
+
+#if ICBC_USE_AVX
+
+union Wide8 {
+    __m256 v;
+    float e[8];
+};
+
+__forceinline Wide8 zero8() {
+    Wide8 r;
+    r.v = _mm256_setzero_ps();
+    return r;
+}
+
+__forceinline Wide8 broadcast8(float a) {
+    Wide8 r;
+    r.v = _mm256_broadcast_ss(&a);
+    return r;
+}
+
+__forceinline Wide8 load8(float * ptr) {
+    Wide8 r;
+    r.v = _mm256_load_ps(ptr);
+    return r;
+}
+
+__forceinline Wide8 operator+(Wide8 a, Wide8 b) {
+    Wide8 r;
+    r.v = _mm256_add_ps(a.v, b.v);
+    return r;
+}
+
+__forceinline Wide8 operator-(Wide8 a, Wide8 b) {
+    Wide8 r;
+    r.v = _mm256_sub_ps(a.v, b.v);
+    return r;
+}
+
+__forceinline Wide8 operator*(Wide8 a, Wide8 b) {
+    Wide8 r;
+    r.v = _mm256_mul_ps(a.v, b.v);
+    return r;
+}
+
+__forceinline Wide8 rcp8(Wide8 a) {
+    Wide8 r;
+    //r.v = _mm256_rcp_ps(a.v);
+    __m256 res = _mm256_rcp_ps(a.v);
+    __m256 muls = _mm256_mul_ps(a.v, _mm256_mul_ps(res, res));
+    r.v = _mm256_sub_ps(_mm256_add_ps(res, res), muls);
+    return r;
+}
+
+// a*b+c
+__forceinline Wide8 mad8(Wide8 a, Wide8 b, Wide8 c) {
+    // @@ AVX does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
+    Wide8 r;
+    r.v = _mm256_fmadd_ps(a.v, b.v, c.v);
+    return r;
+    //return ((a * b) + c);
+}
+
+__forceinline Wide8 saturate8(Wide8 a) {
+    Wide8 r;
+    __m256 zero = _mm256_setzero_ps();
+    __m256 one = _mm256_set1_ps(1.0f);
+    r.v = _mm256_min_ps(_mm256_max_ps(a.v, zero), one);
+    return r;
+}
+
+__forceinline Wide8 round8(Wide8 a) {
+    Wide8 r;
+    r.v = _mm256_round_ps(a.v, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    return r;
+}
+
+
+// Emulate mask vector using packed float.
+
+using Mask8 = __m256;
+//using Mask8 = __mmask8; // Only AVX2:
+
+__forceinline Mask8 operator> (Wide8 A, Wide8 B) { return _mm256_cmp_ps(A.v, B.v, _CMP_GT_OQ); }
+__forceinline Mask8 operator>=(Wide8 A, Wide8 B) { return _mm256_cmp_ps(A.v, B.v, _CMP_GE_OQ); }
+__forceinline Mask8 operator< (Wide8 A, Wide8 B) { return _mm256_cmp_ps(A.v, B.v, _CMP_LT_OQ); }
+__forceinline Mask8 operator<=(Wide8 A, Wide8 B) { return _mm256_cmp_ps(A.v, B.v, _CMP_LE_OQ); }
+
+__forceinline Mask8 operator| (Mask8 A, Mask8 B) { return _mm256_or_ps(A, B); }
+__forceinline Mask8 operator& (Mask8 A, Mask8 B) { return _mm256_and_ps(A, B); }
+__forceinline Mask8 operator^ (Mask8 A, Mask8 B) { return _mm256_xor_ps(A, B); }
+
+__forceinline uint8 to_u8(Mask8 A) {
+    return _mm256_movemask_ps(A);
+}
+
+// mask ? a : b
+__forceinline Wide8 select8(Mask8 mask, Wide8 a, Wide8 b) {
+    Wide8 r;
+    //r.v = _mm256_or_ps(_mm256_andnot_ps(mask, a.v), _mm256_and_ps(mask, b.v));
+    r.v = _mm256_blendv_ps(a.v, b.v, mask);
+    return r;
+}
+
+__forceinline Wide8 lid8() {
+    Wide8 r{ _mm256_set_ps(0, 1, 2, 3, 4, 5, 6, 7) };
+    return r;
+}
+
+__forceinline Wide8 tid8(int base) {
+    return broadcast8(float(base)) + lid8();
+}
+
+
+
+__forceinline bool all(Mask8 m) {
+    __m256 zero = _mm256_setzero_ps();
+    return _mm256_testc_ps(_mm256_cmp_ps(zero, zero, _CMP_EQ_UQ), m) == 0;
+}
+
+__forceinline bool any(Mask8 m) {
+    return _mm256_testz_ps(m, m) == 0;
+}
+
+struct Vector3_Wide8 {
+    Wide8 x;
+    Wide8 y;
+    Wide8 z;
+};
+
+__forceinline Vector3_Wide8 broadcast8(Vector3 v) {
+    Vector3_Wide8 v8;
+    v8.x = broadcast8(v.x);
+    v8.y = broadcast8(v.y);
+    v8.z = broadcast8(v.z);
+    return v8;
+}
+
+__forceinline Vector3_Wide8 broadcast8(float x, float y, float z) {
+    Vector3_Wide8 v8;
+    v8.x = broadcast8(x);
+    v8.y = broadcast8(y);
+    v8.z = broadcast8(z);
+    return v8;
+}
+
+
+__forceinline Vector3_Wide8 operator+(Vector3_Wide8 a, Vector3_Wide8 b) {
+    Vector3_Wide8 v8;
+    v8.x = (a.x + b.x);
+    v8.y = (a.y + b.y);
+    v8.z = (a.z + b.z);
+    return v8;
+}
+
+__forceinline Vector3_Wide8 operator-(Vector3_Wide8 a, Vector3_Wide8 b) {
+    Vector3_Wide8 v8;
+    v8.x = (a.x - b.x);
+    v8.y = (a.y - b.y);
+    v8.z = (a.z - b.z);
+    return v8;
+}
+
+__forceinline Vector3_Wide8 operator*(Vector3_Wide8 a, Vector3_Wide8 b) {
+    Vector3_Wide8 v8;
+    v8.x = (a.x * b.x);
+    v8.y = (a.y * b.y);
+    v8.z = (a.z * b.z);
+    return v8;
+}
+
+__forceinline Vector3_Wide8 operator*(Vector3_Wide8 a, Wide8 b) {
+    Vector3_Wide8 v8;
+    v8.x = (a.x * b);
+    v8.y = (a.y * b);
+    v8.z = (a.z * b);
+    return v8;
+}
+
+__forceinline Vector3_Wide8 mad8(Vector3_Wide8 a, Vector3_Wide8 b, Vector3_Wide8 c) {
+    Vector3_Wide8 v8;
+    v8.x = mad8(a.x, b.x, c.x);
+    v8.y = mad8(a.y, b.y, c.y);
+    v8.z = mad8(a.z, b.z, c.z);
+    return v8;
+}
+
+__forceinline Vector3_Wide8 mad8(Vector3_Wide8 a, Wide8 b, Vector3_Wide8 c) {
+    Vector3_Wide8 v8;
+    v8.x = mad8(a.x, b, c.x);
+    v8.y = mad8(a.y, b, c.y);
+    v8.z = mad8(a.z, b, c.z);
+    return v8;
+}
+
+__forceinline Vector3_Wide8 saturate8(Vector3_Wide8 v) {
+    Vector3_Wide8 r;
+    r.x = saturate8(v.x);
+    r.y = saturate8(v.y);
+    r.z = saturate8(v.z);
+    return r;
+}
+
+__forceinline Vector3_Wide8 round_ept8(Vector3_Wide8 v) {
+    const Wide8 rb_scale = broadcast8(31.0f);
+    const Wide8 rb_inv_scale = broadcast8(1.0f / 31.0f);
+    const Wide8 g_scale = broadcast8(63.0f);
+    const Wide8 g_inv_scale = broadcast8(1.0f / 63.0f);
+
+    Vector3_Wide8 r;
+    r.x = round8(v.x * rb_scale) * rb_inv_scale;
+    r.y = round8(v.y * g_scale) * g_inv_scale;
+    r.z = round8(v.z * rb_scale) * rb_inv_scale;
+    return r;
+}
+
+__forceinline Wide8 dot8(Vector3_Wide8 a, Vector3_Wide8 b) {
+    Wide8 r;
+    r = a.x * b.x + a.y * b.y + a.z * b.z;
+    return r;
+}
+
+// mask ? a : b
+__forceinline Vector3_Wide8 select8(Mask8 mask, Vector3_Wide8 a, Vector3_Wide8 b) {
+    Vector3_Wide8 r;
+    r.x = select8(mask, a.x, b.x);
+    r.y = select8(mask, a.y, b.y);
+    r.z = select8(mask, a.z, b.z);
+    return r;
+}
+
+#endif // ICBC_USE_AVX
+
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -566,7 +811,7 @@ private:
 
     uint m_count;
 
-#if ICBC_USE_SIMD
+#if ICBC_USE_SSE
     ICBC_ALIGN_16 SimdVector m_colors[16];  // color | weight
     SimdVector m_metric;                    // vec3
     SimdVector m_metricSqr;                 // vec3
@@ -678,7 +923,7 @@ static Vector3 computePrincipalComponent_PowerMethod(int n, const Vector3 *__res
 
 void ClusterFit::setErrorMetric(const Vector3 & metric)
 {
-#if ICBC_USE_SIMD
+#if ICBC_USE_SSE
     ICBC_ALIGN_16 Vector4 tmp;
     tmp.xyz = metric;
     tmp.w = 1;
@@ -727,7 +972,7 @@ void ClusterFit::setColorSet(const Vector3 * colors, const float * weights, int 
     }*/
 
     // weight all the points
-#if ICBC_USE_SIMD
+#if ICBC_USE_SSE
     m_xxsum = SimdVector(0.0f);
     m_xsum = SimdVector(0.0f);
 #else
@@ -739,7 +984,7 @@ void ClusterFit::setColorSet(const Vector3 * colors, const float * weights, int 
     for (uint i = 0; i < m_count; ++i)
     {
         int p = order[i];
-#if ICBC_USE_SIMD
+#if ICBC_USE_SSE
         ICBC_ALIGN_16 Vector4 tmp;
         tmp.xyz = colors[p];
         tmp.w = 1;
@@ -791,7 +1036,7 @@ void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
     }
 
     // weight all the points
-#if ICBC_USE_SIMD
+#if ICBC_USE_SSE
     m_xxsum = SimdVector(0.0f);
     m_xsum = SimdVector(0.0f);
 #else
@@ -803,7 +1048,7 @@ void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
     for (uint i = 0; i < 16; ++i)
     {
         int p = order[i];
-#if ICBC_USE_SIMD
+#if ICBC_USE_SSE
         ICBC_ALIGN_16 Vector4 tmp;
         tmp.xyz = colors[p].xyz;
         tmp.w = 1;
@@ -824,6 +1069,7 @@ void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
 #if ICBC_FAST_CLUSTER_FIT
 
 struct Precomp {
+    //uint8 c0, c1, c2, c3;
     float alpha2_sum;
     float beta2_sum;
     float alphabeta_sum;
@@ -840,6 +1086,11 @@ static void init_lsqr_tables() {
         for (int c1 = 0; c1 <= 16 - c0; c1++) {
             for (int c2 = 0; c2 <= 16 - c0 - c1; c2++, i++) {
                 int c3 = 16 - c0 - c1 - c2;
+
+                //s_fourElement[i].c0 = c0;
+                //s_fourElement[i].c1 = c0 + c1;
+                //s_fourElement[i].c2 = c0 + c1 + c2;
+                //s_fourElement[i].c3 = 16;
 
                 //int alpha2_sum = c0 * 9 + c1 * 4 + c2;
                 //int beta2_sum = c3 * 9 + c2 * 4 + c1;
@@ -864,6 +1115,10 @@ static void init_lsqr_tables() {
         for (int c1 = 0; c1 <= 16 - c0; c1++, i++) {
             int c2 = 16 - c1 - c0;
 
+            //s_threeElement[i].c0 = c0;
+            //s_threeElement[i].c1 = c1;
+            //s_threeElement[i].c2 = c2;
+
             //int alpha2_sum = 4 * c0 + c1;
             //int beta2_sum = 4 * c2 + c1;
             //int alphabeta_sum = c1;
@@ -884,7 +1139,85 @@ static void init_lsqr_tables() {
 
 #endif // ICBC_FAST_CLUSTER_FIT
 
-#if ICBC_USE_SIMD
+struct Combinations {
+    uint8 c0, c1, c2, pad;
+};
+
+static ICBC_ALIGN_16 int s_fourClusterTotal[16];
+static ICBC_ALIGN_16 int s_threeClusterTotal[16];
+static ICBC_ALIGN_16 Combinations s_fourCluster[968];
+static ICBC_ALIGN_16 Combinations s_threeCluster[152];
+
+static void init_cluster_tables() {
+
+    for (int t = 1, i = 0; t <= 16; t++) {
+        for (int c0 = 0; c0 <= t; c0++) {
+            for (int c1 = 0; c1 <= t - c0; c1++) {
+                for (int c2 = 0; c2 <= t - c0 - c1; c2++) {
+
+                    // Skip this cluster so that the total is a multiple of 8
+                    if (c0 == 0 && c1 == 0 && c2 == 0) continue;
+
+                    bool found = false;
+                    if (t > 1) {
+                        for (int j = 0; j < s_fourClusterTotal[t-2]; j++) {
+                            if (s_fourCluster[j].c0 == c0 && s_fourCluster[j].c1 == c0+c1 && s_fourCluster[j].c2 == c0+c1+c2) {
+                                found = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!found) {
+                        s_fourCluster[i].c0 = c0;
+                        s_fourCluster[i].c1 = c0+c1;
+                        s_fourCluster[i].c2 = c0+c1+c2;
+                        i++;
+                    }
+                }
+            }
+        }
+
+        s_fourClusterTotal[t - 1] = i;
+    }
+
+    // Replicate last entry.
+    for (int i = 0; i < 7; i++) {
+        s_fourCluster[969 + i] = s_fourCluster[969-1];
+    }
+
+    for (int t = 1, i = 0; t <= 16; t++) {
+        for (int c0 = 0; c0 <= t; c0++) {
+            for (int c1 = 0; c1 <= t - c0; c1++) {
+
+                // Skip this cluster so that the total is a multiple of 8
+                if (c0 == 0 && c1 == 0) continue;
+
+                bool found = false;
+                if (t > 1) {
+                    for (int j = 0; j < s_threeClusterTotal[t - 2]; j++) {
+                        if (s_threeCluster[j].c0 == c0 && s_threeCluster[j].c1 == c0+c1) {
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (!found) {
+                    s_threeCluster[i].c0 = c0;
+                    s_threeCluster[i].c1 = c0 + c1;
+                    i++;
+                }
+            }
+        }
+
+        s_threeClusterTotal[t - 1] = i;
+    }
+
+}
+
+
+#if ICBC_USE_SSE
 
 void ClusterFit::compress3(Vector3 * start, Vector3 * end)
 {
@@ -983,6 +1316,7 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
     SimdVector bestend = SimdVector(0.0f);
     SimdVector besterror = SimdVector(FLT_MAX);
 
+#if !ICBC_USE_SAT
     SimdVector x0 = zero;
 
     // check all possible clusters for this total order
@@ -1050,6 +1384,76 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
 
         x0 += m_colors[c0];
     }
+#else
+
+    // This could be done in set colors.
+    ICBC_ALIGN_16 SimdVector x_sat[17];
+    SimdVector x_sum = zero;
+    for (int i = 0; i < count; i++) {
+        x_sat[i] = x_sum;
+        x_sum += m_colors[i];
+    }
+    x_sat[count] = x_sum;
+
+    // check all possible clusters for this total order
+    for (int i = 0; i < s_fourClusterTotal[count - 1]; i += ICBC_SAT_INC)
+    {
+        uint c0 = s_fourCluster[i].c0;
+        uint c1 = s_fourCluster[i].c1;
+        uint c2 = s_fourCluster[i].c2;
+        //ICBC_ASSERT(c2 <= count);
+
+        SimdVector x0 = x_sat[c0];
+        SimdVector x1 = x_sat[c1] - x_sat[c0];
+        SimdVector x2 = x_sat[c2] - x_sat[c1];
+
+        const SimdVector x3 = m_xsum - x2 - x1 - x0;
+
+        //const Vector3 alphax_sum = x0 + x1 * (2.0f / 3.0f) + x2 * (1.0f / 3.0f);
+        //const float alpha2_sum = w0 + w1 * (4.0f/9.0f) + w2 * (1.0f/9.0f);
+        const SimdVector alphax_sum = multiplyAdd(x2, onethird, multiplyAdd(x1, twothirds, x0)); // alphax_sum, alpha2_sum
+        const SimdVector alpha2_sum = alphax_sum.splatW();
+
+        //const Vector3 betax_sum = x3 + x2 * (2.0f / 3.0f) + x1 * (1.0f / 3.0f);
+        //const float beta2_sum = w3 + w2 * (4.0f/9.0f) + w1 * (1.0f/9.0f);
+        const SimdVector betax_sum = multiplyAdd(x2, twothirds, multiplyAdd(x1, onethird, x3)); // betax_sum, beta2_sum
+        const SimdVector beta2_sum = betax_sum.splatW();
+
+        //const float alphabeta_sum = (w1 + w2) * (2.0f/9.0f);
+        const SimdVector alphabeta_sum = twonineths * (x1 + x2).splatW(); // alphabeta_sum
+
+        //const float factor = 1.0f / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+        const SimdVector factor = reciprocal(negativeMultiplySubtract(alphabeta_sum, alphabeta_sum, alpha2_sum*beta2_sum));
+
+        SimdVector a = negativeMultiplySubtract(betax_sum, alphabeta_sum, alphax_sum*beta2_sum) * factor;
+        SimdVector b = negativeMultiplySubtract(alphax_sum, alphabeta_sum, betax_sum*alpha2_sum) * factor;
+
+        // clamp to the grid
+        a = min(one, max(zero, a));
+        b = min(one, max(zero, b));
+        a = truncate(multiplyAdd(grid, a, half)) * gridrcp;
+        b = truncate(multiplyAdd(grid, b, half)) * gridrcp;
+
+        // compute the error (we skip the constant xxsum)
+        // error = a*a*alpha2_sum + b*b*beta2_sum + 2.0f*( a*b*alphabeta_sum - a*alphax_sum - b*betax_sum );
+        SimdVector e1 = multiplyAdd(a*a, alpha2_sum, b*b*beta2_sum);
+        SimdVector e2 = negativeMultiplySubtract(a, alphax_sum, a*b*alphabeta_sum);
+        SimdVector e3 = negativeMultiplySubtract(b, betax_sum, e2);
+        SimdVector e4 = multiplyAdd(two, e3, e1);
+
+        // apply the metric to the error term
+        SimdVector e5 = e4 * m_metricSqr;
+        SimdVector error = e5.splatX() + e5.splatY() + e5.splatZ();
+
+        // keep the solution if it wins
+        if (compareAnyLessThan(error, besterror))
+        {
+            besterror = error;
+            beststart = a;
+            bestend = b;
+        }
+    }
+#endif
 
     *start = beststart.toVector3();
     *end = bestend.toVector3();
@@ -1059,7 +1463,7 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
 
 void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
 {
-    const int count = m_count;
+    ICBC_ASSERT(m_count == 16);
     const SimdVector one = SimdVector(1.0f);
     const SimdVector zero = SimdVector(0.0f);
     const SimdVector half(0.5f, 0.5f, 0.5f, 0.25f);
@@ -1075,11 +1479,11 @@ void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
     SimdVector x0 = zero;
 
     // check all possible clusters for this total order
-    for (int c0 = 0, i = 0; c0 <= count; c0++)
+    for (int c0 = 0, i = 0; c0 <= 16; c0++)
     {
         SimdVector x1 = zero;
 
-        for (int c1 = 0; c1 <= count - c0; c1++, i++)
+        for (int c1 = 0; c1 <= 16 - c0; c1++, i++)
         {
             const SimdVector constants = SimdVector((const float *)&s_threeElement[i]);
 
@@ -1130,6 +1534,7 @@ void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
 
 void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
 {
+    ICBC_ASSERT(m_count == 16);
     const SimdVector one = SimdVector(1.0f);
     const SimdVector zero = SimdVector(0.0f);
     const SimdVector half = SimdVector(0.5f);
@@ -1144,6 +1549,73 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
     SimdVector bestend = SimdVector(0.0f);
     SimdVector besterror = SimdVector(FLT_MAX);
 
+
+#if ICBC_USE_SAT
+    // This could be done in set colors.
+    ICBC_ALIGN_16 SimdVector x_sat[17];
+    SimdVector x_sum = zero;
+    for (int i = 0; i < 16; i++) {
+        x_sat[i] = x_sum;
+        x_sum += m_colors[i];
+    }
+    x_sat[16] = x_sum;
+
+    // check all possible clusters for this total order
+    for (int i = 0; i < 969; i += ICBC_SAT_INC)
+    {
+        uint c0 = s_fourCluster[i].c0;
+        uint c1 = s_fourCluster[i].c1;
+        uint c2 = s_fourCluster[i].c2;
+        //ICBC_ASSERT(c2 <= count);
+
+        SimdVector x0 = x_sat[c0];
+        SimdVector x1 = x_sat[c1] - x_sat[c0];
+        SimdVector x2 = x_sat[c2] - x_sat[c1];
+
+        //const SimdVector x3 = m_xsum - x2 - x1 - x0;
+
+        const SimdVector constants = SimdVector((const float *)&s_fourElement[i]);
+
+        const SimdVector alpha2_sum = constants.splatX();
+        const SimdVector beta2_sum = constants.splatY();
+        const SimdVector alphabeta_sum = constants.splatZ();
+        const SimdVector factor = constants.splatW();
+
+        const SimdVector alphax_sum = multiplyAdd(x2, onethird, multiplyAdd(x1, twothirds, x0));
+        const SimdVector betax_sum = m_xsum - alphax_sum;
+
+        SimdVector a = negativeMultiplySubtract(betax_sum, alphabeta_sum, alphax_sum*beta2_sum) * factor;
+        SimdVector b = negativeMultiplySubtract(alphax_sum, alphabeta_sum, betax_sum*alpha2_sum) * factor;
+
+        // clamp to the grid
+        a = min(one, max(zero, a));
+        b = min(one, max(zero, b));
+        a = truncate(multiplyAdd(grid, a, half)) * gridrcp;
+        b = truncate(multiplyAdd(grid, b, half)) * gridrcp;
+
+        // compute the error (we skip the constant xxsum)
+        // error = a*a*alpha2_sum + b*b*beta2_sum + 2.0f*( a*b*alphabeta_sum - a*alphax_sum - b*betax_sum );
+        SimdVector e1 = multiplyAdd(a*a, alpha2_sum, b*b*beta2_sum);
+        SimdVector e2 = negativeMultiplySubtract(a, alphax_sum, a*b*alphabeta_sum);
+        SimdVector e3 = negativeMultiplySubtract(b, betax_sum, e2);
+        SimdVector e4 = multiplyAdd(two, e3, e1);
+
+        // apply the metric to the error term
+        SimdVector e5 = e4 * m_metricSqr;
+        SimdVector error = e5.splatX() + e5.splatY() + e5.splatZ();
+
+        // keep the solution if it wins
+        if (compareAnyLessThan(error, besterror))
+        {
+            besterror = error;
+            beststart = a;
+            bestend = b;
+        }
+
+        x2 += m_colors[c0 + c1 + c2];
+    }
+
+#else
     SimdVector x0 = zero;
 
     // check all possible clusters for this total order
@@ -1203,6 +1675,7 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
 
         x0 += m_colors[c0];
     }
+#endif
 
     *start = beststart.toVector3();
     *end = bestend.toVector3();
@@ -1235,6 +1708,233 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
     Vector3 beststart = { 0.0f };
     Vector3 bestend = { 0.0f };
     float besterror = FLT_MAX;
+
+#if ICBC_USE_AVX
+
+// @@ Use the same SAT for both methods.
+#if ICBC_USE_AVX2_GATHER
+    // This could be done in set colors.
+    ICBC_ALIGN_16 Vector4 x_sat[17];
+    ICBC_ALIGN_16 Vector4 x_sum = { 0 };
+    for (uint i = 0; i < count; i++) {
+        x_sat[i] = x_sum;
+        x_sum.xyz += m_colors[i];
+        x_sum.w += m_weights[i];
+    }
+    x_sat[count] = x_sum;
+
+    for (uint i = count + 1; i < 17; i++) {
+        x_sat[i] = { FLT_MAX, FLT_MAX, FLT_MAX, FLT_MAX };
+    }
+#else
+    ICBC_ALIGN_16 float r_sat[16];
+    ICBC_ALIGN_16 float g_sat[16];
+    ICBC_ALIGN_16 float b_sat[16];
+    ICBC_ALIGN_16 float w_sat[16];
+
+    r_sat[0] = m_colors[0].x;
+    g_sat[0] = m_colors[0].y;
+    b_sat[0] = m_colors[0].z;
+    w_sat[0] = m_weights[0];
+
+    for (uint i = 1; i < count; i++) {
+        r_sat[i] = r_sat[i - 1] + m_colors[i].x;
+        g_sat[i] = g_sat[i - 1] + m_colors[i].y;
+        b_sat[i] = b_sat[i - 1] + m_colors[i].z;
+        w_sat[i] = w_sat[i - 1] + m_weights[i];
+    }
+    for (uint i = count; i < 16; i++) {
+        r_sat[i] = FLT_MAX;
+        g_sat[i] = FLT_MAX;
+        b_sat[i] = FLT_MAX;
+        w_sat[i] = FLT_MAX;
+    }
+#endif
+
+    Wide8 besterror8 = broadcast8(FLT_MAX);
+    Vector3_Wide8 beststart8 = { zero8(), zero8(), zero8() };
+    Vector3_Wide8 bestend8 = { zero8(), zero8(), zero8() };
+
+    // check all possible clusters for this total order
+    const int total_order_count = s_threeClusterTotal[count - 1];
+
+    for (int i = 0; i < total_order_count; i += 8)
+    {
+        Vector3_Wide8 x0, x1;
+        Wide8 w0, w1;
+
+#if ICBC_USE_AVX2_PERMUTE
+        // Load 4 uint8 per lane.
+        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_threeCluster[i]);
+
+        if (count <= 8) {
+            // Load r_sat in one register:
+            Wide8 r07 = load8(r_sat);
+            Wide8 g07 = load8(g_sat);
+            Wide8 b07 = load8(b_sat);
+            Wide8 w07 = load8(w_sat);
+
+            // Load index and decrement.
+            auto c0 = _mm256_sub_epi32(_mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+
+            auto c1 = _mm256_sub_epi32(_mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+
+            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+        }
+        else {
+            // Load r_sat in two registers:
+            Wide8 rLo = load8(r_sat); Wide8 rUp = load8(r_sat + 8);
+            Wide8 gLo = load8(g_sat); Wide8 gUp = load8(g_sat + 8);
+            Wide8 bLo = load8(b_sat); Wide8 bUp = load8(b_sat + 8);
+            Wide8 wLo = load8(w_sat); Wide8 wUp = load8(w_sat + 8);
+
+            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
+            auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+
+            auto c0Up = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
+
+            // if upper bit set, same, otherwise load sat entry.
+            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c0Up), x0.x.v, _mm256_castsi256_ps(c0Up));
+            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c0Up), x0.y.v, _mm256_castsi256_ps(c0Up));
+            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c0Up), x0.z.v, _mm256_castsi256_ps(c0Up));
+            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c0Up), w0.v, _mm256_castsi256_ps(c0Up));
+
+            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
+            auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+
+            auto c1Up = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
+
+            // if upper bit set, same, otherwise load sat entry.
+            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c1Up), x1.x.v, _mm256_castsi256_ps(c1Up));
+            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c1Up), x1.y.v, _mm256_castsi256_ps(c1Up));
+            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c1Up), x1.z.v, _mm256_castsi256_ps(c1Up));
+            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c1Up), w1.v, _mm256_castsi256_ps(c1Up));
+        }
+
+#elif ICBC_USE_AVX2_GATHER
+
+        // Load 4 uint8 per lane.
+        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_threeCluster[i]);
+
+        // Load SAT elements.
+        float * base = (float *)x_sat;
+
+        __m256i c0 = _mm256_slli_epi32(packedClusterIndex, 2);
+        c0 = _mm256_and_si256(c0, _mm256_set1_epi32(0x3FC));
+
+        x0.x.v = _mm256_i32gather_ps(base + 0, c0, 4);
+        x0.y.v = _mm256_i32gather_ps(base + 1, c0, 4);
+        x0.z.v = _mm256_i32gather_ps(base + 2, c0, 4);
+        w0.v = _mm256_i32gather_ps(base + 3, c0, 4);
+
+        __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 6), _mm256_set1_epi32(0x3FC));
+        x1.x.v = _mm256_i32gather_ps(base + 0, c1, 4);
+        x1.y.v = _mm256_i32gather_ps(base + 1, c1, 4);
+        x1.z.v = _mm256_i32gather_ps(base + 2, c1, 4);
+        w1.v = _mm256_i32gather_ps(base + 3, c1, 4);
+
+#else
+        // Plain AVX1 path
+        x0.x = zero8(); x0.y = zero8(); x0.z = zero8(); w0 = zero8();
+        x1.x = zero8(); x1.y = zero8(); x1.z = zero8(); w1 = zero8();
+
+        for (int l = 0; l < 8; l++) {
+            uint c0 = s_threeCluster[i + l].c0;
+            if (c0) {
+                c0 -= 1;
+                x0.x.e[l] = r_sat[c0];
+                x0.y.e[l] = g_sat[c0];
+                x0.z.e[l] = b_sat[c0];
+                w0.e[l] = w_sat[c0];
+            }
+
+            uint c1 = s_threeCluster[i + l].c1;
+            if (c1) {
+                c1 -= 1;
+                x1.x.e[l] = r_sat[c1];
+                x1.y.e[l] = g_sat[c1];
+                x1.z.e[l] = b_sat[c1];
+                w1.e[l] = w_sat[c1];
+            }
+        }
+#endif
+
+        Wide8 w2 = broadcast8(m_wsum) - w1;
+        x1 = x1 - x0;
+        w1 = w1 - w0;
+
+        Wide8 alphabeta_sum = w1 * broadcast8(0.25f);
+        Wide8 alpha2_sum = w0 + alphabeta_sum;
+        Wide8 beta2_sum = w2 + alphabeta_sum;
+        Wide8 factor = rcp8(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+
+        Vector3_Wide8 alphax_sum = x0 + x1 * broadcast8(0.5f);
+        Vector3_Wide8 betax_sum = broadcast8(m_xsum) - alphax_sum;
+
+        Vector3_Wide8 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
+        Vector3_Wide8 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+
+        // clamp to the grid
+        a = saturate8(a);
+        b = saturate8(b);
+        a = round_ept8(a);
+        b = round_ept8(b);
+
+        // compute the error
+        Vector3_Wide8 e1 = mad8(a * a, alpha2_sum, mad8(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * broadcast8(2.0f)));
+
+        // apply the metric to the error term
+        //Wide8 error = dot8(e1, broadcast8(m_metricSqr));
+        Wide8 error = e1.x + e1.y + e1.z;//(e1, broadcast8(m_metricSqr));
+
+        // keep the solution if it wins
+        auto mask = (error < besterror8);
+
+        // We could mask the unused lanes here, but instead set the invalid SAT entries to FLT_MAX.
+        //mask = (mask & (broadcast8(total_order_count) >= tid8(i))); // This doesn't seem to help. Is it OK to consider elements out of bounds?
+
+        besterror8 = select8(mask, besterror8, error);
+        beststart8 = select8(mask, beststart8, a);
+        bestend8 = select8(mask, bestend8, b);
+    }
+
+    // Is there a better way to do this reduction?
+    int bestindex;
+    for (int i = 0; i < 8; i++) {
+        if (besterror8.e[i] < besterror) {
+            besterror = besterror8.e[i];
+            bestindex = i;
+        }
+    }
+    beststart.x = beststart8.x.e[bestindex];
+    beststart.y = beststart8.y.e[bestindex];
+    beststart.z = beststart8.z.e[bestindex];
+    bestend.x = bestend8.x.e[bestindex];
+    bestend.y = bestend8.y.e[bestindex];
+    bestend.z = bestend8.z.e[bestindex];
+
+#else
 
     Vector3 x0 = { 0.0f };
     float w0 = 0.0f;
@@ -1293,10 +1993,12 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
         x0 += m_colors[c0];
         w0 += m_weights[c0];
     }
+#endif
 
     *start = beststart;
     *end = bestend;
 }
+
 
 void ClusterFit::compress4(Vector3 * start, Vector3 * end)
 {
@@ -1308,6 +2010,276 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
     Vector3 beststart = { 0.0f };
     Vector3 bestend = { 0.0f };
     float besterror = FLT_MAX;
+
+#if ICBC_USE_AVX
+
+    // @@ Use the same SAT for both methods.
+    // This could be done in set colors and shared for both compress3 and compress4.
+#if ICBC_USE_AVX2_GATHER
+    ICBC_ALIGN_16 Vector4 x_sat[17];
+    ICBC_ALIGN_16 Vector4 x_sum = { 0 };
+    for (uint i = 0; i < count; i++) {
+        x_sat[i] = x_sum;
+        x_sum.xyz += m_colors[i];
+        x_sum.w += m_weights[i];
+    }
+    x_sat[count] = x_sum;
+
+    for (uint i = count+1; i < 17; i++) {
+        x_sat[i] = {FLT_MAX, FLT_MAX, FLT_MAX, FLT_MAX};
+    }
+#else
+    ICBC_ALIGN_16 float r_sat[16];
+    ICBC_ALIGN_16 float g_sat[16];
+    ICBC_ALIGN_16 float b_sat[16];
+    ICBC_ALIGN_16 float w_sat[16];
+
+    r_sat[0] = m_colors[0].x;
+    g_sat[0] = m_colors[0].y;
+    b_sat[0] = m_colors[0].z;
+    w_sat[0] = m_weights[0];
+
+    for (uint i = 1; i < count; i++) {
+        r_sat[i] = r_sat[i-1] + m_colors[i].x;
+        g_sat[i] = g_sat[i-1] + m_colors[i].y;
+        b_sat[i] = b_sat[i-1] + m_colors[i].z;
+        w_sat[i] = w_sat[i-1] + m_weights[i];
+    }
+    for (uint i = count; i < 16; i++) {
+        r_sat[i] = FLT_MAX;
+        g_sat[i] = FLT_MAX;
+        b_sat[i] = FLT_MAX;
+        w_sat[i] = FLT_MAX;
+    }
+#endif
+
+    Wide8 besterror8 = broadcast8(FLT_MAX);
+    Vector3_Wide8 beststart8 = { zero8(), zero8(), zero8() };
+    Vector3_Wide8 bestend8 = { zero8(), zero8(), zero8() };
+
+    // check all possible clusters for this total order
+    const int total_order_count = s_fourClusterTotal[count - 1];
+
+    for (int i = 0; i < total_order_count; i += 8)
+    {
+        Vector3_Wide8 x0, x1, x2;
+        Wide8 w0, w1, w2;
+
+#if ICBC_USE_AVX2_PERMUTE
+        // Load 4 uint8 per lane.
+        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_fourCluster[i]);
+
+        if (count <= 8) {
+            // Load r_sat in one register:
+            Wide8 r07 = load8(r_sat);
+            Wide8 g07 = load8(g_sat);
+            Wide8 b07 = load8(b_sat);
+            Wide8 w07 = load8(w_sat);
+
+            // Load index and decrement.
+            auto c0 = _mm256_sub_epi32(_mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            w0.v   = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+
+            auto c1 = _mm256_sub_epi32(_mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+
+            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            w1.v   = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+
+            auto c2 = _mm256_sub_epi32(_mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+
+            x2.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
+            x2.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
+            x2.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
+            w2.v   = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
+        }
+        else {
+            // Load r_sat in two registers:
+            Wide8 rLo = load8(r_sat); Wide8 rUp = load8(r_sat + 8);
+            Wide8 gLo = load8(g_sat); Wide8 gUp = load8(g_sat + 8);
+            Wide8 bLo = load8(b_sat); Wide8 bUp = load8(b_sat + 8);
+            Wide8 wLo = load8(w_sat); Wide8 wUp = load8(w_sat + 8);
+
+            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
+            auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+
+            auto c0Up = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
+
+            // if upper bit set, same, otherwise load sat entry.
+            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c0Up), x0.x.v, _mm256_castsi256_ps(c0Up));
+            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c0Up), x0.y.v, _mm256_castsi256_ps(c0Up));
+            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c0Up), x0.z.v, _mm256_castsi256_ps(c0Up));
+            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c0Up), w0.v, _mm256_castsi256_ps(c0Up));
+
+            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
+            auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+
+            auto c1Up = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
+
+            // if upper bit set, same, otherwise load sat entry.
+            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c1Up), x1.x.v, _mm256_castsi256_ps(c1Up));
+            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c1Up), x1.y.v, _mm256_castsi256_ps(c1Up));
+            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c1Up), x1.z.v, _mm256_castsi256_ps(c1Up));
+            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c1Up), w1.v, _mm256_castsi256_ps(c1Up));
+
+            auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
+            auto c2Lo = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            x2.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
+            x2.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
+            x2.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
+            w2.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
+
+            auto c2Up = _mm256_sub_epi32(c2, _mm256_set1_epi32(9));
+
+            // if upper bit set, same, otherwise load sat entry.
+            x2.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c2Up), x2.x.v, _mm256_castsi256_ps(c2Up));
+            x2.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c2Up), x2.y.v, _mm256_castsi256_ps(c2Up));
+            x2.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c2Up), x2.z.v, _mm256_castsi256_ps(c2Up));
+            w2.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c2Up), w2.v, _mm256_castsi256_ps(c2Up));
+        }
+
+#elif ICBC_USE_AVX2_GATHER
+
+        // Load 4 uint8 per lane.
+        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_fourCluster[i]);
+
+        // Load SAT elements.
+        float * base = (float *)x_sat;
+
+        __m256i c0 = _mm256_slli_epi32(packedClusterIndex, 2);
+        c0 = _mm256_and_si256(c0, _mm256_set1_epi32(0x3FC));
+
+        x0.x.v = _mm256_i32gather_ps(base + 0, c0, 4);
+        x0.y.v = _mm256_i32gather_ps(base + 1, c0, 4);
+        x0.z.v = _mm256_i32gather_ps(base + 2, c0, 4);
+        w0.v = _mm256_i32gather_ps(base + 3, c0, 4);
+
+        __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 6), _mm256_set1_epi32(0x3FC));
+        x1.x.v = _mm256_i32gather_ps(base + 0, c1, 4);
+        x1.y.v = _mm256_i32gather_ps(base + 1, c1, 4);
+        x1.z.v = _mm256_i32gather_ps(base + 2, c1, 4);
+        w1.v = _mm256_i32gather_ps(base + 3, c1, 4);
+
+        __m256i c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 14), _mm256_set1_epi32(0x3FC));
+        x2.x.v = _mm256_i32gather_ps(base + 0, c2, 4);
+        x2.y.v = _mm256_i32gather_ps(base + 1, c2, 4);
+        x2.z.v = _mm256_i32gather_ps(base + 2, c2, 4);
+        w2.v = _mm256_i32gather_ps(base + 3, c2, 4);
+
+#else
+        // Plain AVX1 path
+        x0.x = zero8(); x0.y = zero8(); x0.z = zero8(); w0 = zero8();
+        x1.x = zero8(); x1.y = zero8(); x1.z = zero8(); w1 = zero8();
+        x2.x = zero8(); x2.y = zero8(); x2.z = zero8(); w2 = zero8();
+
+        for (int l = 0; l < 8; l++) {
+            uint c0 = s_fourCluster[i + l].c0;
+            if (c0) {
+                c0 -= 1;
+                x0.x.e[l] = r_sat[c0];
+                x0.y.e[l] = g_sat[c0];
+                x0.z.e[l] = b_sat[c0];
+                w0.e[l] = w_sat[c0];
+            }
+
+            uint c1 = s_fourCluster[i + l].c1;
+            if (c1) {
+                c1 -= 1;
+                x1.x.e[l] = r_sat[c1];
+                x1.y.e[l] = g_sat[c1];
+                x1.z.e[l] = b_sat[c1];
+                w1.e[l] = w_sat[c1];
+            }
+
+            uint c2 = s_fourCluster[i + l].c2;
+            if (c2) {
+                c2 -= 1;
+                x2.x.e[l] = r_sat[c2];
+                x2.y.e[l] = g_sat[c2];
+                x2.z.e[l] = b_sat[c2];
+                w2.e[l] = w_sat[c2];
+            }
+        }
+#endif
+
+        Wide8 w3 = broadcast8(m_wsum) - w2;
+        x2 = x2 - x1;
+        x1 = x1 - x0;
+        w2 = w2 - w1;
+        w1 = w1 - w0;
+
+        Wide8 alpha2_sum = mad8(w2, broadcast8(1.0f / 9.0f), mad8(w1, broadcast8(4.0f / 9.0f), w0));
+        Wide8 beta2_sum  = mad8(w1, broadcast8(1.0f / 9.0f), mad8(w2, broadcast8(4.0f / 9.0f), w3));
+
+        Wide8 alphabeta_sum = (w1 + w2) * broadcast8(2.0f / 9.0f);
+        Wide8 factor = rcp8(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+
+        Vector3_Wide8 alphax_sum = mad8(x2, broadcast8(1.0f / 3.0f), mad8(x1, broadcast8(2.0f / 3.0f), x0));
+        Vector3_Wide8 betax_sum = broadcast8(m_xsum) - alphax_sum;
+
+        Vector3_Wide8 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
+        Vector3_Wide8 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+
+        // clamp to the grid
+        a = saturate8(a);
+        b = saturate8(b);
+        a = round_ept8(a);
+        b = round_ept8(b);
+
+        // compute the error
+        Vector3_Wide8 e1 = mad8(a * a, alpha2_sum, mad8(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * broadcast8(2.0f)));
+
+        // apply the metric to the error term
+        //Wide8 error = dot8(e1, broadcast8(m_metricSqr));
+        Wide8 error = e1.x + e1.y + e1.z;//(e1, broadcast8(m_metricSqr));
+
+        // keep the solution if it wins
+        auto mask = (error < besterror8);
+        
+        // We could mask the unused lanes here, but instead set the invalid SAT entries to FLT_MAX.
+        //mask = (mask & (broadcast8(total_order_count) >= tid8(i))); // This doesn't seem to help. Is it OK to consider elements out of bounds?
+
+        besterror8 = select8(mask, besterror8, error);
+        beststart8 = select8(mask, beststart8, a);
+        bestend8 = select8(mask, bestend8, b);
+    }
+
+    // Is there a better way to do this reduction?
+    int bestindex;
+    for (int i = 0; i < 8; i++) {
+        if (besterror8.e[i] < besterror) {
+            besterror = besterror8.e[i];
+            bestindex = i;
+        }
+    }
+    beststart.x = beststart8.x.e[bestindex]; 
+    beststart.y = beststart8.y.e[bestindex]; 
+    beststart.z = beststart8.z.e[bestindex];
+    bestend.x = bestend8.x.e[bestindex];
+    bestend.y = bestend8.y.e[bestindex];
+    bestend.z = bestend8.z.e[bestindex];
+
+#elif !ICBC_USE_SAT
 
     Vector3 x0 = { 0.0f };
     float w0 = 0.0f;
@@ -1376,6 +2348,85 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         w0 += m_weights[c0];
     }
 
+    /*if (besterror < last_error - 0.001) {
+        int k = 1;
+    }*/
+
+#else
+    // This could be done in set colors.
+    Vector3 x_sat[17];
+    float w_sat[17];
+
+    Vector3 x_sum = { 0 };
+    float w_sum = 0;
+    for (uint i = 0; i < count; i++) {
+        x_sat[i] = x_sum;
+        w_sat[i] = w_sum;
+        x_sum += m_colors[i];
+        w_sum += m_weights[i];
+    }
+    x_sat[count] = x_sum;
+    w_sat[count] = w_sum;
+
+
+    // check all possible clusters for this total order
+    for (int i = 0; i < s_fourClusterTotal[count-1]; i+=ICBC_SAT_INC)
+    {
+        uint c0 = s_fourCluster[i].c0;
+        uint c1 = s_fourCluster[i].c1;
+        uint c2 = s_fourCluster[i].c2;
+        ICBC_ASSERT(c0 + c1 + c2 <= count);
+
+        Vector3 x0 = x_sat[c0];
+        float w0 = w_sat[c0];
+
+        Vector3 x1 = x_sat[c1];
+        float w1 = w_sat[c1];
+
+        Vector3 x2 = x_sat[c2];
+        float w2 = w_sat[c2];
+
+        float w3 = m_wsum - w2;
+        x2 = x2 - x1;
+        x1 = x1 - x0;
+        w2 = w2 - w1;
+        w1 = w1 - w0;
+
+        float const alpha2_sum = w0 + w1 * (4.0f / 9.0f) + w2 * (1.0f / 9.0f);
+        float const beta2_sum = w3 + w2 * (4.0f / 9.0f) + w1 * (1.0f / 9.0f);
+        float const alphabeta_sum = (w1 + w2) * (2.0f / 9.0f);
+        float const factor = 1.0f / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+
+        Vector3 const alphax_sum = x0 + x1 * (2.0f / 3.0f) + x2 * (1.0f / 3.0f);
+        Vector3 const betax_sum = m_xsum - alphax_sum;
+
+        Vector3 a = (alphax_sum*beta2_sum - betax_sum * alphabeta_sum)*factor;
+        Vector3 b = (betax_sum*alpha2_sum - alphax_sum * alphabeta_sum)*factor;
+
+        // clamp to the grid
+        a = saturate(a);
+        b = saturate(b);
+        a = round(grid * a) * gridrcp;
+        b = round(grid * b) * gridrcp;
+
+        // compute the error
+        Vector3 e1 = a * a*alpha2_sum + b * b*beta2_sum + 2.0f*(a*b*alphabeta_sum - a * alphax_sum - b * betax_sum);
+
+        // apply the metric to the error term
+        float error = dot(e1, m_metricSqr);
+
+        // keep the solution if it wins
+        if (error < besterror) // In case of ties we could evaluate the exact error.
+        {
+            besterror = error;
+            beststart = a;
+            bestend = b;
+        }
+    }
+
+
+#endif
+
     *start = beststart;
     *end = bestend;
 }
@@ -1384,7 +2435,7 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
 
 void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
 {
-    const uint count = m_count;
+    ICBC_ASSERT(m_count == 16);
     const Vector3 grid = { 31.0f, 63.0f, 31.0f };
     const Vector3 gridrcp = { 1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f };
 
@@ -1396,11 +2447,11 @@ void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
     Vector3 x0 = { 0.0f };
 
     // check all possible clusters for this total order
-    for (uint c0 = 0, i = 0; c0 <= count; c0++)
+    for (uint c0 = 0, i = 0; c0 <= 16; c0++)
     {
         Vector3 x1 = { 0.0f };
 
-        for (uint c1 = 0; c1 <= count - c0; c1++, i++)
+        for (uint c1 = 0; c1 <= 16 - c0; c1++, i++)
         {
             float const alpha2_sum = s_threeElement[i].alpha2_sum;
             float const beta2_sum = s_threeElement[i].beta2_sum;
@@ -1450,7 +2501,7 @@ void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
 
 void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
 {
-    const uint count = m_count;
+    ICBC_ASSERT(m_count == 16);
     const Vector3 grid = { 31.0f, 63.0f, 31.0f };
     const Vector3 gridrcp = { 1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f };
 
@@ -1459,18 +2510,19 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
     Vector3 bestend = { 0.0f };
     float besterror = FLT_MAX;
 
+#if !ICBC_USE_SAT
     Vector3 x0 = { 0.0f };
 
     // check all possible clusters for this total order
-    for (uint c0 = 0, i = 0; c0 <= count; c0++)
+    for (uint c0 = 0, i = 0; c0 <= 16; c0++)
     {
         Vector3 x1 = { 0.0f };
 
-        for (uint c1 = 0; c1 <= count - c0; c1++)
+        for (uint c1 = 0; c1 <= 16 - c0; c1++)
         {
             Vector3 x2 = { 0.0f };
 
-            for (uint c2 = 0; c2 <= count - c0 - c1; c2++, i++)
+            for (uint c2 = 0; c2 <= 16 - c0 - c1; c2++, i++)
             {
                 float const alpha2_sum = s_fourElement[i].alpha2_sum;
                 float const beta2_sum = s_fourElement[i].beta2_sum;
@@ -1493,7 +2545,8 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
                 a = round(grid * a) * gridrcp;
                 b = round(grid * b) * gridrcp;
 #endif
-                // @@ It would be much more accurate to evaluate the error exactly. 
+                // @@ It would be much more accurate to evaluate the error exactly. If we computed the error exactly, then
+                //    we could bake the *factor in alpha2_sum, beta2_sum and alphabeta_sum.
 
                 // compute the error
                 Vector3 e1 = a * a*alpha2_sum + b * b*beta2_sum + 2.0f*(a*b*alphabeta_sum - a * alphax_sum - b * betax_sum);
@@ -1517,12 +2570,86 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
 
         x0 += m_colors[c0];
     }
+#else
+    // This could be done in set colors.
+    Vector3 x_sat[17];
+    //float w_sat[17];
+
+    Vector3 x_sum = { 0 };
+    //float w_sum = 0;
+    for (uint i = 0; i < 17; i++) {
+        x_sat[i] = x_sum;
+        //w_sat[i] = w_sum;
+        x_sum += m_colors[i];
+        //w_sum += m_weights[i];
+    }
+
+    // Ideas:
+    // - Use this method with weighted colors. Use only precomputed counts and summed area tables. Compute alpha/beta factors on the fly.
+    // - We can precompute tables for reduced number of colors. Are these tables subset of each other? Can we simply change the sum? Yes!
+    // - Only do SIMD version of this loop. Lay down table and sat optimally for AVX access patterns.
+
+    // check all possible clusters for this total order
+    for (uint i = 0; i < 969; i+=ICBC_SAT_INC)
+    {
+        int c0 = s_fourElement[i].c0;
+        int c01 = s_fourElement[i].c1;
+        int c012 = s_fourElement[i].c2;
+
+        Vector3 x0 = x_sat[c0];
+        //float w0 = w_sat[c0];
+
+        Vector3 x1 = x_sat[c01] - x_sat[c0];
+        //float w1 = w_sat[c01] - w_sat[c0];
+
+        Vector3 x2 = x_sat[c012] - x_sat[c01];
+        //float w2 = w_sat[c012] - w_sat[c01];
+
+        float const alpha2_sum = s_fourElement[i].alpha2_sum;
+        float const beta2_sum = s_fourElement[i].beta2_sum;
+        float const alphabeta_sum = s_fourElement[i].alphabeta_sum;
+        float const factor = s_fourElement[i].factor;
+
+        Vector3 const alphax_sum = x0 + x1 * (2.0f / 3.0f) + x2 * (1.0f / 3.0f);
+        Vector3 const betax_sum = m_xsum - alphax_sum;
+
+        Vector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
+        Vector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+
+        // clamp to the grid
+        a = saturate(a);
+        b = saturate(b);
+#if ICBC_PERFECT_ROUND
+        a = round565(a);
+        b = round565(b);
+#else
+        a = round(grid * a) * gridrcp;
+        b = round(grid * b) * gridrcp;
+#endif
+        // @@ It would be much more accurate to evaluate the error exactly. 
+
+        // compute the error
+        Vector3 e1 = a * a*alpha2_sum + b * b*beta2_sum +2.0f*(a*b*alphabeta_sum - a * alphax_sum - b * betax_sum);
+
+        // apply the metric to the error term
+        float error = dot(e1, m_metricSqr);
+
+        // keep the solution if it wins
+        if (error < besterror)
+        {
+            besterror = error;
+            beststart = a;
+            bestend = b;
+        }
+    }
+#endif
 
     *start = beststart;
     *end = bestend;
 }
 #endif // ICBC_FAST_CLUSTER_FIT
-#endif // ICBC_USE_SIMD
+#endif // ICBC_USE_SSE
+
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2278,6 +3405,7 @@ static float compress_dxt1_bounding_box_exhaustive(const Vector4 input_colors[16
 static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, BlockDXT1 * output)
 {
     ClusterFit fit;
+    fit.setColorSet(input_colors, color_weights);
 #if ICBC_FAST_CLUSTER_FIT
     if (count > 15) fit.setColorSet(input_colors, color_weights);
     else
@@ -2291,7 +3419,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
     else
 #endif
     fit.compress4(&start, &end);
-
+    
     output_block4(input_colors, color_weights, start, end, output);
 
     float best_error = evaluate_mse(input_colors, input_weights, color_weights, output);
@@ -2301,6 +3429,8 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
             Vector3 tmp_colors[16];
             float tmp_weights[16];
             int tmp_count = skip_blacks(colors, weights, count, tmp_colors, tmp_weights);
+            if (!tmp_count) return FLT_MAX;
+
             fit.setColorSet(tmp_colors, tmp_weights, tmp_count, color_weights);
 
             fit.compress3(&start, &end);
@@ -2448,6 +3578,7 @@ static float compress_dxt1(const Vector4 input_colors[16], const float input_wei
             *output = optimized_block;
         }
     }
+    //float error = FLT_MAX;
 
     // @@ Use current endpoints as input for initial PCA approximation?
 
@@ -2692,6 +3823,7 @@ static void compress_dxt1_fast(const uint8 input_colors[16*4], BlockDXT1 * outpu
 
 void init_dxt1() {
     init_dxt1_tables();
+    init_cluster_tables();
 #if ICBC_FAST_CLUSTER_FIT
     init_lsqr_tables();
 #endif
