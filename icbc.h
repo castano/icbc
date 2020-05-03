@@ -1,8 +1,11 @@
-// icbc.h v1.0
+// icbc.h v1.1
 // A High Quality BC1 Encoder by Ignacio Castano <castano@gmail.com>.
 // 
 // LICENSE:
 //  MIT license at the end of this file.
+
+#ifndef ICBC_H
+#define ICBC_H
 
 namespace icbc {
 
@@ -22,6 +25,8 @@ namespace icbc {
 
 }
 
+#endif // ICBC_H
+
 #ifdef ICBC_IMPLEMENTATION
 
 #define ICBC_FLOAT  1
@@ -33,9 +38,12 @@ namespace icbc {
 
 
 // Two vector code paths:
+#ifndef ICBC_USE_SIMD
 #define ICBC_USE_SIMD 0         // Original SIMD version. (ICBC_SSE, ICBC_SSE2)
-#define ICBC_USE_VEC 6          // SPMD version. (ICBC_SSE2, ICBC_AVX1, ICBC_AVX2, ICBC_AVX512)
-
+#endif
+#ifndef ICBC_USE_VEC
+#define ICBC_USE_VEC 1          // SPMD version. (ICBC_SSE2, ICBC_AVX1, ICBC_AVX2, ICBC_AVX512)
+#endif
 
 #if ICBC_USE_VEC == ICBC_AVX2
 #define ICBC_USE_AVX2_PERMUTE2 0
@@ -60,6 +68,9 @@ namespace icbc {
 
 #if ICBC_USE_VEC
 #include <immintrin.h>
+#endif
+
+#if ICBC_USE_VEC == ICBC_AVX2
 #include <zmmintrin.h>
 #endif
 
@@ -260,6 +271,12 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 #endif
 #endif
 
+#if __GNUC__
+#define ICBC_FORCEINLINE inline
+#else
+#define ICBC_FORCEINLINE __forceinline
+#endif
+
 #if ICBC_USE_SIMD
 
 #define SIMD_INLINE inline
@@ -430,59 +447,59 @@ SIMD_INLINE bool compareAnyLessThan(SimdVector::Arg left, SimdVector::Arg right)
 
 using Vec = float;
 
-__forceinline float & lane(Vec & v, int i) {
+ICBC_FORCEINLINE float & lane(Vec & v, int i) {
     return v;
 }
 
-__forceinline Vec vzero() {
+ICBC_FORCEINLINE Vec vzero() {
     return 0.0f;
 }
 
-__forceinline Vec vbroadcast(float x) {
+ICBC_FORCEINLINE Vec vbroadcast(float x) {
     return x;
 }
 
-__forceinline Vec vload(float * ptr) {
+ICBC_FORCEINLINE Vec vload(float * ptr) {
     return *ptr;
 }
 
-__forceinline Vec vrcp(Vec a) {
+ICBC_FORCEINLINE Vec vrcp(Vec a) {
     return 1.0f / a;    // use _mm_rcp_ps ?
 }
 
 // a*b+c
-__forceinline Vec vmad(Vec a, Vec b, Vec c) {
+ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
     return a * b + c;
 }
 
-__forceinline Vec vsaturate(Vec a) {
+ICBC_FORCEINLINE Vec vsaturate(Vec a) {
     return min(max(a, 0.0f), 1.0f);
 }
 
-__forceinline Vec vround(Vec a) {
+ICBC_FORCEINLINE Vec vround(Vec a) {
     //return _mm_round_ss(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
     return float(int(a + 0.5f));
 }
 
-__forceinline Vec lane_id() {
+ICBC_FORCEINLINE Vec lane_id() {
     return 0;
 }
 
 using VMask = bool;
 
-__forceinline int to_int(VMask A) {
+ICBC_FORCEINLINE int to_int(VMask A) {
     return A;
 }
 
-__forceinline Vec vselect(VMask mask, Vec a, Vec b) {
+ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
     return mask ? b : a;
 }
 
-__forceinline bool all(VMask m) {
+ICBC_FORCEINLINE bool all(VMask m) {
     return m;
 }
 
-__forceinline bool any(VMask m) {
+ICBC_FORCEINLINE bool any(VMask m) {
     return m;
 }
 
@@ -492,86 +509,86 @@ __forceinline bool any(VMask m) {
 
 using Vec = __m128;
 
-__forceinline float & lane(Vec & v, int i) {
+ICBC_FORCEINLINE float & lane(Vec & v, int i) {
     return v.m128_f32[i];
 }
 
-__forceinline Vec vzero() {
+ICBC_FORCEINLINE Vec vzero() {
     return _mm_setzero_ps();
 }
 
-__forceinline Vec vbroadcast(float x) {
+ICBC_FORCEINLINE Vec vbroadcast(float x) {
     return _mm_broadcast_ss(&x);
 }
 
-__forceinline Vec vload(float * ptr) {
+ICBC_FORCEINLINE Vec vload(float * ptr) {
     return _mm_load_ps(ptr);
 }
 
-__forceinline Vec operator+(Vec a, Vec b) {
+ICBC_FORCEINLINE Vec operator+(Vec a, Vec b) {
     return _mm_add_ps(a, b);
 }
 
-__forceinline Vec operator-(Vec a, Vec b) {
+ICBC_FORCEINLINE Vec operator-(Vec a, Vec b) {
     return _mm_sub_ps(a, b);
 }
 
-__forceinline Vec operator*(Vec a, Vec b) {
+ICBC_FORCEINLINE Vec operator*(Vec a, Vec b) {
     return _mm_mul_ps(a, b);
 }
 
-__forceinline Vec vrcp(Vec a) {
+ICBC_FORCEINLINE Vec vrcp(Vec a) {
     Vec res = _mm_rcp_ps(a);
     auto muls = _mm_mul_ps(a, _mm_mul_ps(res, res));
     return _mm_sub_ps(_mm_add_ps(res, res), muls);
 }
 
 // a*b+c
-__forceinline Vec vmad(Vec a, Vec b, Vec c) {
+ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
     return a * b + c;
 }
 
-__forceinline Vec vsaturate(Vec a) {
+ICBC_FORCEINLINE Vec vsaturate(Vec a) {
     auto zero = _mm_setzero_ps();
     auto one = _mm_set1_ps(1.0f);
     return _mm_min_ps(_mm_max_ps(a, zero), one);
 }
 
-__forceinline Vec vround(Vec a) {
+ICBC_FORCEINLINE Vec vround(Vec a) {
     // SSE4.1
     return _mm_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 }
 
-__forceinline Vec lane_id() {
+ICBC_FORCEINLINE Vec lane_id() {
     return _mm_set_ps(0, 1, 2, 3); // @@ Is this the right order?
 }
 
 using VMask = __m128;
 
-__forceinline VMask operator> (Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GT_OQ); }
-__forceinline VMask operator>=(Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GE_OQ); }
-__forceinline VMask operator< (Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_LT_OQ); }
-__forceinline VMask operator<=(Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_LE_OQ); }
+ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GT_OQ); }
+ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GE_OQ); }
+ICBC_FORCEINLINE VMask operator< (Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_LT_OQ); }
+ICBC_FORCEINLINE VMask operator<=(Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_LE_OQ); }
 
-__forceinline VMask operator| (VMask A, VMask B) { return _mm_or_ps(A, B); }
-__forceinline VMask operator& (VMask A, VMask B) { return _mm_and_ps(A, B); }
-__forceinline VMask operator^ (VMask A, VMask B) { return _mm_xor_ps(A, B); }
+ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return _mm_or_ps(A, B); }
+ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return _mm_and_ps(A, B); }
+ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return _mm_xor_ps(A, B); }
 
-__forceinline int to_int(VMask A) {
+ICBC_FORCEINLINE int to_int(VMask A) {
     return _mm_movemask_ps(A);
 }
 
 // mask ? b : a
-__forceinline Vec vselect(VMask mask, Vec a, Vec b) {
+ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
     return _mm_or_ps(_mm_andnot_ps(mask, a), _mm_and_ps(mask, b));
 }
 
-__forceinline bool all(VMask m) {
+ICBC_FORCEINLINE bool all(VMask m) {
     auto zero = _mm_setzero_ps();
     return _mm_testc_ps(_mm_cmp_ps(zero, zero, _CMP_EQ_UQ), m) == 0;
 }
 
-__forceinline bool any(VMask m) {
+ICBC_FORCEINLINE bool any(VMask m) {
     return _mm_testz_ps(m, m) == 0;
 }
 
@@ -581,60 +598,60 @@ __forceinline bool any(VMask m) {
 
 using Vec = __m256;
 
-__forceinline float & lane(Vec & v, int i) {
+ICBC_FORCEINLINE float & lane(Vec & v, int i) {
     return v.m256_f32[i];
 }
 
-__forceinline Vec vzero() {
+ICBC_FORCEINLINE Vec vzero() {
     return _mm256_setzero_ps();
 }
 
-__forceinline Vec vbroadcast(float a) {
+ICBC_FORCEINLINE Vec vbroadcast(float a) {
     return _mm256_broadcast_ss(&a);
 }
 
-__forceinline Vec vload(float * ptr) {
+ICBC_FORCEINLINE Vec vload(float * ptr) {
     return _mm256_load_ps(ptr);
 }
 
-__forceinline Vec operator+(Vec a, Vec b) {
+ICBC_FORCEINLINE Vec operator+(Vec a, Vec b) {
     return _mm256_add_ps(a, b);
 }
 
-__forceinline Vec operator-(Vec a, Vec b) {
+ICBC_FORCEINLINE Vec operator-(Vec a, Vec b) {
     return _mm256_sub_ps(a, b);
 }
 
-__forceinline Vec operator*(Vec a, Vec b) {
+ICBC_FORCEINLINE Vec operator*(Vec a, Vec b) {
     return _mm256_mul_ps(a, b);
 }
 
 // @@ Acording to Rich rcp is not deterministic (different precision on Intel and AMD).
-__forceinline Vec vrcp(Vec a) {
+ICBC_FORCEINLINE Vec vrcp(Vec a) {
     __m256 res = _mm256_rcp_ps(a);
     __m256 muls = _mm256_mul_ps(a, _mm256_mul_ps(res, res));
     return _mm256_sub_ps(_mm256_add_ps(res, res), muls);
 }
 
 // a*b+c
-__forceinline Vec vmad(Vec a, Vec b, Vec c) {
+ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
     // @@ AVX does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
     return _mm256_fmadd_ps(a, b, c);
     //return ((a * b) + c);
 }
 
-__forceinline Vec vsaturate(Vec a) {
+ICBC_FORCEINLINE Vec vsaturate(Vec a) {
     __m256 zero = _mm256_setzero_ps();
     __m256 one = _mm256_set1_ps(1.0f);
     return _mm256_min_ps(_mm256_max_ps(a, zero), one);
 }
 
-__forceinline Vec vround(Vec a) {
+ICBC_FORCEINLINE Vec vround(Vec a) {
     return _mm256_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 }
 
 
-__forceinline Vec lane_id() {
+ICBC_FORCEINLINE Vec lane_id() {
     return _mm256_set_ps(0, 1, 2, 3, 4, 5, 6, 7); // @@ Is this the right order?
 }
 
@@ -643,30 +660,30 @@ __forceinline Vec lane_id() {
 
 using VMask = __m256;
 
-__forceinline VMask operator> (Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GT_OQ); }
-__forceinline VMask operator>=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GE_OQ); }
-__forceinline VMask operator< (Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_LT_OQ); }
-__forceinline VMask operator<=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_LE_OQ); }
+ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GT_OQ); }
+ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GE_OQ); }
+ICBC_FORCEINLINE VMask operator< (Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_LT_OQ); }
+ICBC_FORCEINLINE VMask operator<=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_LE_OQ); }
 
-__forceinline VMask operator| (VMask A, VMask B) { return _mm256_or_ps(A, B); }
-__forceinline VMask operator& (VMask A, VMask B) { return _mm256_and_ps(A, B); }
-__forceinline VMask operator^ (VMask A, VMask B) { return _mm256_xor_ps(A, B); }
+ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return _mm256_or_ps(A, B); }
+ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return _mm256_and_ps(A, B); }
+ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return _mm256_xor_ps(A, B); }
 
-__forceinline int to_int(VMask A) {
+ICBC_FORCEINLINE int to_int(VMask A) {
     return _mm256_movemask_ps(A);
 }
 
 // mask ? b : a
-__forceinline Vec vselect(VMask mask, Vec a, Vec b) {
+ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
     return _mm256_blendv_ps(a, b, mask);
 }
 
-__forceinline bool all(VMask m) {
+ICBC_FORCEINLINE bool all(VMask m) {
     __m256 zero = _mm256_setzero_ps();
     return _mm256_testc_ps(_mm256_cmp_ps(zero, zero, _CMP_EQ_UQ), m) == 0;
 }
 
-__forceinline bool any(VMask m) {
+ICBC_FORCEINLINE bool any(VMask m) {
     return _mm256_testz_ps(m, m) == 0;
 }
 
@@ -681,92 +698,92 @@ struct VMask {
     __mmask16 m;
 };
 
-__forceinline float & lane(Vec & v, int i) {
+ICBC_FORCEINLINE float & lane(Vec & v, int i) {
     return v.m512_f32[i];
 }
 
-__forceinline Vec vzero() {
+ICBC_FORCEINLINE Vec vzero() {
     return _mm512_setzero_ps();
 }
 
-__forceinline Vec vbroadcast(float a) {
+ICBC_FORCEINLINE Vec vbroadcast(float a) {
     return _mm512_set1_ps(a);
 }
 
-__forceinline Vec vload(float * ptr) {
+ICBC_FORCEINLINE Vec vload(float * ptr) {
     return _mm512_load_ps(ptr);
 }
 
-__forceinline Vec vload(VMask mask, float * ptr) {
+ICBC_FORCEINLINE Vec vload(VMask mask, float * ptr) {
     return _mm512_mask_load_ps(_mm512_undefined(), mask.m, ptr);
 }
 
-__forceinline Vec vload(VMask mask, float * ptr, float fallback) {
+ICBC_FORCEINLINE Vec vload(VMask mask, float * ptr, float fallback) {
     return _mm512_mask_load_ps(_mm512_set1_ps(fallback), mask.m, ptr);
 }
 
-__forceinline Vec operator+(Vec a, Vec b) {
+ICBC_FORCEINLINE Vec operator+(Vec a, Vec b) {
     return _mm512_add_ps(a, b);
 }
 
-__forceinline Vec operator-(Vec a, Vec b) {
+ICBC_FORCEINLINE Vec operator-(Vec a, Vec b) {
     return _mm512_sub_ps(a, b);
 }
 
-__forceinline Vec operator*(Vec a, Vec b) {
+ICBC_FORCEINLINE Vec operator*(Vec a, Vec b) {
     return _mm512_mul_ps(a, b);
 }
 
-__forceinline Vec vrcp(Vec a) {
+ICBC_FORCEINLINE Vec vrcp(Vec a) {
     // @@ Use an aproximation?
     return _mm512_div_ps(vbroadcast(1.0f), a);
 }
 
 // a*b+c
-__forceinline Vec vmad(Vec a, Vec b, Vec c) {
+ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
     return _mm512_fmadd_ps(a, b, c);
 }
 
-__forceinline Vec vsaturate(Vec a) {
+ICBC_FORCEINLINE Vec vsaturate(Vec a) {
     auto zero = _mm512_setzero_ps();
     auto one = _mm512_set1_ps(1.0f);
     return _mm512_min_ps(_mm512_max_ps(a, zero), one);
 }
 
-__forceinline Vec vround(Vec a) {
+ICBC_FORCEINLINE Vec vround(Vec a) {
     return _mm512_roundscale_ps(a, _MM_FROUND_TO_NEAREST_INT);
 }
 
 
-__forceinline Vec lane_id() {
+ICBC_FORCEINLINE Vec lane_id() {
     return _mm512_set_ps(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
 }
 
 
-__forceinline VMask operator> (Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GT_OQ) }; }
-__forceinline VMask operator>=(Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GE_OQ) }; }
-__forceinline VMask operator< (Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LT_OQ) }; }
-__forceinline VMask operator<=(Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LE_OQ) }; }
+ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GT_OQ) }; }
+ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GE_OQ) }; }
+ICBC_FORCEINLINE VMask operator< (Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LT_OQ) }; }
+ICBC_FORCEINLINE VMask operator<=(Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LE_OQ) }; }
 
-__forceinline VMask operator! (VMask A) { return { _mm512_knot(A.m) }; }
-__forceinline VMask operator| (VMask A, VMask B) { return { _mm512_kor(A.m, B.m) }; }
-__forceinline VMask operator& (VMask A, VMask B) { return { _mm512_kand(A.m, B.m) }; }
-__forceinline VMask operator^ (VMask A, VMask B) { return { _mm512_kxor(A.m, B.m) }; }
+ICBC_FORCEINLINE VMask operator! (VMask A) { return { _mm512_knot(A.m) }; }
+ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return { _mm512_kor(A.m, B.m) }; }
+ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return { _mm512_kand(A.m, B.m) }; }
+ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return { _mm512_kxor(A.m, B.m) }; }
 
-__forceinline int to_int(VMask A) {
+ICBC_FORCEINLINE int to_int(VMask A) {
     return (int)A.m;
 }
 
 // mask ? b : a
-__forceinline Vec vselect(VMask mask, Vec a, Vec b) {
+ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
     return _mm512_mask_blend_ps(mask.m, a, b);
 }
 
-__forceinline bool all(VMask mask) {
+ICBC_FORCEINLINE bool all(VMask mask) {
     return mask.m == 0xFFFFFFFF;
 }
 
-__forceinline bool any(VMask mask) {
+ICBC_FORCEINLINE bool any(VMask mask) {
     return mask.m != 0;
 }
 
@@ -780,7 +797,7 @@ struct Vector3_Vec {
     Vec z;
 };
 
-__forceinline Vector3_Vec vbroadcast(Vector3 v) {
+ICBC_FORCEINLINE Vector3_Vec vbroadcast(Vector3 v) {
     Vector3_Vec v8;
     v8.x = vbroadcast(v.x);
     v8.y = vbroadcast(v.y);
@@ -788,7 +805,7 @@ __forceinline Vector3_Vec vbroadcast(Vector3 v) {
     return v8;
 }
 
-__forceinline Vector3_Vec vbroadcast(float x, float y, float z) {
+ICBC_FORCEINLINE Vector3_Vec vbroadcast(float x, float y, float z) {
     Vector3_Vec v8;
     v8.x = vbroadcast(x);
     v8.y = vbroadcast(y);
@@ -797,7 +814,7 @@ __forceinline Vector3_Vec vbroadcast(float x, float y, float z) {
 }
 
 
-__forceinline Vector3_Vec operator+(Vector3_Vec a, Vector3_Vec b) {
+ICBC_FORCEINLINE Vector3_Vec operator+(Vector3_Vec a, Vector3_Vec b) {
     Vector3_Vec v8;
     v8.x = (a.x + b.x);
     v8.y = (a.y + b.y);
@@ -805,7 +822,7 @@ __forceinline Vector3_Vec operator+(Vector3_Vec a, Vector3_Vec b) {
     return v8;
 }
 
-__forceinline Vector3_Vec operator-(Vector3_Vec a, Vector3_Vec b) {
+ICBC_FORCEINLINE Vector3_Vec operator-(Vector3_Vec a, Vector3_Vec b) {
     Vector3_Vec v8;
     v8.x = (a.x - b.x);
     v8.y = (a.y - b.y);
@@ -813,7 +830,7 @@ __forceinline Vector3_Vec operator-(Vector3_Vec a, Vector3_Vec b) {
     return v8;
 }
 
-__forceinline Vector3_Vec operator*(Vector3_Vec a, Vector3_Vec b) {
+ICBC_FORCEINLINE Vector3_Vec operator*(Vector3_Vec a, Vector3_Vec b) {
     Vector3_Vec v8;
     v8.x = (a.x * b.x);
     v8.y = (a.y * b.y);
@@ -821,7 +838,7 @@ __forceinline Vector3_Vec operator*(Vector3_Vec a, Vector3_Vec b) {
     return v8;
 }
 
-__forceinline Vector3_Vec operator*(Vector3_Vec a, Vec b) {
+ICBC_FORCEINLINE Vector3_Vec operator*(Vector3_Vec a, Vec b) {
     Vector3_Vec v8;
     v8.x = (a.x * b);
     v8.y = (a.y * b);
@@ -829,7 +846,7 @@ __forceinline Vector3_Vec operator*(Vector3_Vec a, Vec b) {
     return v8;
 }
 
-__forceinline Vector3_Vec vmad(Vector3_Vec a, Vector3_Vec b, Vector3_Vec c) {
+ICBC_FORCEINLINE Vector3_Vec vmad(Vector3_Vec a, Vector3_Vec b, Vector3_Vec c) {
     Vector3_Vec v8;
     v8.x = vmad(a.x, b.x, c.x);
     v8.y = vmad(a.y, b.y, c.y);
@@ -837,7 +854,7 @@ __forceinline Vector3_Vec vmad(Vector3_Vec a, Vector3_Vec b, Vector3_Vec c) {
     return v8;
 }
 
-__forceinline Vector3_Vec vmad(Vector3_Vec a, Vec b, Vector3_Vec c) {
+ICBC_FORCEINLINE Vector3_Vec vmad(Vector3_Vec a, Vec b, Vector3_Vec c) {
     Vector3_Vec v8;
     v8.x = vmad(a.x, b, c.x);
     v8.y = vmad(a.y, b, c.y);
@@ -845,7 +862,7 @@ __forceinline Vector3_Vec vmad(Vector3_Vec a, Vec b, Vector3_Vec c) {
     return v8;
 }
 
-__forceinline Vector3_Vec vsaturate(Vector3_Vec v) {
+ICBC_FORCEINLINE Vector3_Vec vsaturate(Vector3_Vec v) {
     Vector3_Vec r;
     r.x = vsaturate(v.x);
     r.y = vsaturate(v.y);
@@ -853,7 +870,7 @@ __forceinline Vector3_Vec vsaturate(Vector3_Vec v) {
     return r;
 }
 
-__forceinline Vector3_Vec vround_ept(Vector3_Vec v) {
+ICBC_FORCEINLINE Vector3_Vec vround_ept(Vector3_Vec v) {
     const Vec rb_scale = vbroadcast(31.0f);
     const Vec rb_inv_scale = vbroadcast(1.0f / 31.0f);
     const Vec g_scale = vbroadcast(63.0f);
@@ -866,14 +883,14 @@ __forceinline Vector3_Vec vround_ept(Vector3_Vec v) {
     return r;
 }
 
-__forceinline Vec vdot(Vector3_Vec a, Vector3_Vec b) {
+ICBC_FORCEINLINE Vec vdot(Vector3_Vec a, Vector3_Vec b) {
     Vec r;
     r = a.x * b.x + a.y * b.y + a.z * b.z;
     return r;
 }
 
 // mask ? b : a
-__forceinline Vector3_Vec vselect(VMask mask, Vector3_Vec a, Vector3_Vec b) {
+ICBC_FORCEINLINE Vector3_Vec vselect(VMask mask, Vector3_Vec a, Vector3_Vec b) {
     Vector3_Vec r;
     r.x = vselect(mask, a.x, b.x);
     r.y = vselect(mask, a.y, b.y);
@@ -1466,6 +1483,7 @@ static void init_cluster_tables() {
         s_threeCluster[152 + i] = s_threeCluster[152 - 1];
     }
 
+    /*
     for (int i = 0; i < 16; i++) {
         printf("%d, ", s_fourClusterTotal[i] + 1);
     }
@@ -1475,7 +1493,7 @@ static void init_cluster_tables() {
         printf("%d, ", s_threeClusterTotal[i] + 1);
     }
     printf("\n\n");
-
+    */
 }
 
 
