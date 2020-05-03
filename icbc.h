@@ -32,9 +32,16 @@ namespace icbc {
 #define ICBC_FLOAT  1
 #define ICBC_SSE    2
 #define ICBC_SSE2   3
-#define ICBC_AVX1   4
-#define ICBC_AVX2   5
-#define ICBC_AVX512 6
+#define ICBC_SSE41  4
+#define ICBC_AVX1   5
+#define ICBC_AVX2   6
+#define ICBC_AVX512 7
+
+// AVX does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
+//#define ICBC_USE_FMA 1
+
+// According to Rich rcp is not deterministic (different precision on Intel and AMD), enable if you don't care about that.
+//#define ICBC_USE_RCP 1
 
 
 // Two vector code paths:
@@ -61,16 +68,21 @@ namespace icbc {
 #endif
 
 
-#if ICBC_USE_SIMD || ICBC_USE_VEC
+#if ICBC_USE_SIMD || ICBC_USE_VEC >= ICBC_SSE
 #include <xmmintrin.h>
 #include <emmintrin.h>
 #endif 
 
-#if ICBC_USE_VEC
+#if ICBC_USE_VEC >= ICBC_SSE
+#include <immintrin.h>
+#include <nmmintrin.h> // for SSE4.2
+#endif
+
+#if ICBC_USE_VEC >= ICBC_AVX
 #include <immintrin.h>
 #endif
 
-#if ICBC_USE_VEC == ICBC_AVX2
+#if ICBC_USE_VEC >= ICBC_AVX512
 #include <zmmintrin.h>
 #endif
 
@@ -441,73 +453,34 @@ SIMD_INLINE bool compareAnyLessThan(SimdVector::Arg left, SimdVector::Arg right)
 
 #endif // ICBC_USE_SIMD
 
+
 #if ICBC_USE_VEC == ICBC_FLOAT  // Purely scalar version.
 
 #define VEC_SIZE 1
 
 using Vec = float;
-
-ICBC_FORCEINLINE float & lane(Vec & v, int i) {
-    return v;
-}
-
-ICBC_FORCEINLINE Vec vzero() {
-    return 0.0f;
-}
-
-ICBC_FORCEINLINE Vec vbroadcast(float x) {
-    return x;
-}
-
-ICBC_FORCEINLINE Vec vload(float * ptr) {
-    return *ptr;
-}
-
-ICBC_FORCEINLINE Vec vrcp(Vec a) {
-    return 1.0f / a;    // use _mm_rcp_ps ?
-}
-
-// a*b+c
-ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
-    return a * b + c;
-}
-
-ICBC_FORCEINLINE Vec vsaturate(Vec a) {
-    return min(max(a, 0.0f), 1.0f);
-}
-
-ICBC_FORCEINLINE Vec vround(Vec a) {
-    //return _mm_round_ss(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-    return float(int(a + 0.5f));
-}
-
-ICBC_FORCEINLINE Vec lane_id() {
-    return 0;
-}
-
 using VMask = bool;
 
-ICBC_FORCEINLINE int to_int(VMask A) {
-    return A;
-}
+ICBC_FORCEINLINE float & lane(Vec & v, int i) { return v; }
+ICBC_FORCEINLINE Vec vzero() { return 0.0f; }
+ICBC_FORCEINLINE Vec vbroadcast(float x) { return x; }
+ICBC_FORCEINLINE Vec vload(float * ptr) { return *ptr; }
+ICBC_FORCEINLINE Vec vrcp(Vec a) { return 1.0f / a; }
+ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) { return a * b + c; }
+ICBC_FORCEINLINE Vec vsaturate(Vec a) { return min(max(a, 0.0f), 1.0f); }
+ICBC_FORCEINLINE Vec vround(Vec a) { return float(int(a + 0.5f)); }
+ICBC_FORCEINLINE Vec lane_id() { return 0; }
+ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) { return mask ? b : a; }
+ICBC_FORCEINLINE bool all(VMask m) { return m; }
+ICBC_FORCEINLINE bool any(VMask m) { return m; }
 
-ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
-    return mask ? b : a;
-}
 
-ICBC_FORCEINLINE bool all(VMask m) {
-    return m;
-}
-
-ICBC_FORCEINLINE bool any(VMask m) {
-    return m;
-}
-
-#elif ICBC_USE_VEC == ICBC_SSE2   // @@ Actually SSE4.1 only
+#elif ICBC_USE_VEC == ICBC_SSE2 || ICBC_USE_VEC == ICBC_SSE41
 
 #define VEC_SIZE 4
 
 using Vec = __m128;
+using VMask = __m128;
 
 ICBC_FORCEINLINE float & lane(Vec & v, int i) {
     return v.m128_f32[i];
@@ -538,9 +511,13 @@ ICBC_FORCEINLINE Vec operator*(Vec a, Vec b) {
 }
 
 ICBC_FORCEINLINE Vec vrcp(Vec a) {
+#if ICBC_USE_RCP
     Vec res = _mm_rcp_ps(a);
     auto muls = _mm_mul_ps(a, _mm_mul_ps(res, res));
     return _mm_sub_ps(_mm_add_ps(res, res), muls);
+#else
+    return _mm_div_ps(vbroadcast(1.0f), a);
+#endif
 }
 
 // a*b+c
@@ -555,15 +532,16 @@ ICBC_FORCEINLINE Vec vsaturate(Vec a) {
 }
 
 ICBC_FORCEINLINE Vec vround(Vec a) {
-    // SSE4.1
+#if ICBC_USE_VEC == ICBC_SSE41
     return _mm_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+#else
+    return _mm_cvtepi32_ps(_mm_cvttps_epi32(a + vbroadcast(0.5f)));
+#endif
 }
 
 ICBC_FORCEINLINE Vec lane_id() {
-    return _mm_set_ps(0, 1, 2, 3); // @@ Is this the right order?
+    return _mm_set_ps(3, 2, 1, 0);
 }
-
-using VMask = __m128;
 
 ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GT_OQ); }
 ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GE_OQ); }
@@ -574,13 +552,13 @@ ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return _mm_or_ps(A, B); }
 ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return _mm_and_ps(A, B); }
 ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return _mm_xor_ps(A, B); }
 
-ICBC_FORCEINLINE int to_int(VMask A) {
-    return _mm_movemask_ps(A);
-}
-
 // mask ? b : a
 ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
+#if ICBC_USE_VEC == ICBC_SSE41
+    return _mm_blendv_ps(a, b, mask);
+#else
     return _mm_or_ps(_mm_andnot_ps(mask, a), _mm_and_ps(mask, b));
+#endif
 }
 
 ICBC_FORCEINLINE bool all(VMask m) {
@@ -592,11 +570,13 @@ ICBC_FORCEINLINE bool any(VMask m) {
     return _mm_testz_ps(m, m) == 0;
 }
 
+
 #elif ICBC_USE_VEC == ICBC_AVX1 || ICBC_USE_VEC == ICBC_AVX2
 
 #define VEC_SIZE 8
 
 using Vec = __m256;
+using VMask = __m256;   // Emulate mask vector using packed float.
 
 ICBC_FORCEINLINE float & lane(Vec & v, int i) {
     return v.m256_f32[i];
@@ -626,18 +606,23 @@ ICBC_FORCEINLINE Vec operator*(Vec a, Vec b) {
     return _mm256_mul_ps(a, b);
 }
 
-// @@ Acording to Rich rcp is not deterministic (different precision on Intel and AMD).
 ICBC_FORCEINLINE Vec vrcp(Vec a) {
+#if ICBC_USE_RCP
     __m256 res = _mm256_rcp_ps(a);
     __m256 muls = _mm256_mul_ps(a, _mm256_mul_ps(res, res));
     return _mm256_sub_ps(_mm256_add_ps(res, res), muls);
+#else
+    return _mm256_div_ps(vbroadcast(1.0f), a);
+#endif
 }
 
 // a*b+c
 ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
-    // @@ AVX does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
+#if ICBC_USE_FMA
     return _mm256_fmadd_ps(a, b, c);
-    //return ((a * b) + c);
+#else
+    return ((a * b) + c);
+#endif
 }
 
 ICBC_FORCEINLINE Vec vsaturate(Vec a) {
@@ -650,15 +635,9 @@ ICBC_FORCEINLINE Vec vround(Vec a) {
     return _mm256_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 }
 
-
 ICBC_FORCEINLINE Vec lane_id() {
-    return _mm256_set_ps(0, 1, 2, 3, 4, 5, 6, 7); // @@ Is this the right order?
+    return _mm256_set_ps(7, 6, 5, 4, 3, 2, 1, 0);
 }
-
-
-// Emulate mask vector using packed float.
-
-using VMask = __m256;
 
 ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GT_OQ); }
 ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GE_OQ); }
@@ -668,10 +647,6 @@ ICBC_FORCEINLINE VMask operator<=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CM
 ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return _mm256_or_ps(A, B); }
 ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return _mm256_and_ps(A, B); }
 ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return _mm256_xor_ps(A, B); }
-
-ICBC_FORCEINLINE int to_int(VMask A) {
-    return _mm256_movemask_ps(A);
-}
 
 // mask ? b : a
 ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
@@ -687,16 +662,13 @@ ICBC_FORCEINLINE bool any(VMask m) {
     return _mm256_testz_ps(m, m) == 0;
 }
 
+
 #elif ICBC_USE_VEC == ICBC_AVX512
 
 #define VEC_SIZE 16
 
 using Vec = __m512;
-
-//using VMask = __mmask16;
-struct VMask {
-    __mmask16 m;
-};
+struct VMask { __mmask16 m; };
 
 ICBC_FORCEINLINE float & lane(Vec & v, int i) {
     return v.m512_f32[i];
@@ -754,11 +726,9 @@ ICBC_FORCEINLINE Vec vround(Vec a) {
     return _mm512_roundscale_ps(a, _MM_FROUND_TO_NEAREST_INT);
 }
 
-
 ICBC_FORCEINLINE Vec lane_id() {
     return _mm512_set_ps(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
 }
-
 
 ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GT_OQ) }; }
 ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GE_OQ) }; }
@@ -769,10 +739,6 @@ ICBC_FORCEINLINE VMask operator! (VMask A) { return { _mm512_knot(A.m) }; }
 ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return { _mm512_kor(A.m, B.m) }; }
 ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return { _mm512_kand(A.m, B.m) }; }
 ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return { _mm512_kxor(A.m, B.m) }; }
-
-ICBC_FORCEINLINE int to_int(VMask A) {
-    return (int)A.m;
-}
 
 // mask ? b : a
 ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
@@ -4498,6 +4464,13 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 }
 
 } // icbc
+
+// Do not polute preprocessor definitions.
+#undef ICBC_DECODER
+#undef ICBC_USE_SIMD
+#undef ICBC_USE_VEC
+#undef ICBC_ASSERT
+
 #endif // ICBC_IMPLEMENTATION
 
 // Copyright (c) 2020 Ignacio Castano <castano@gmail.com>
