@@ -24,7 +24,7 @@ The following chart shows the average PSNR of different BC1 compressors and diff
 ![kodim-chart](kodim-chart.png "PSNR chart on Kodim+Waterloo sets.")
 
 - stb is stb_dxt version 1.09 with various improvements that Rich and I have proposed.
-- RGBCx is version 1.12 with `allow_3color` and `use_transparent_texels_for_black` enabled.
+- RGBCx is version 1.12 levels 0 to 18 with `allow_3color` and `use_transparent_texels_for_black` enabled.
 - squish is version 1.15
 - amd is AMD's CMP_Core V3.2.4691
 - ICBC is version 1.0 compiled with SSE2 support and `ICBC_FAST_CLUSTER_FIT` enabled.
