@@ -24,27 +24,49 @@ namespace icbc {
 
 #ifdef ICBC_IMPLEMENTATION
 
-#ifndef ICBC_USE_SSE
-#define ICBC_USE_SSE 2  // 0=scalar, 1=SSE, 2=SSE2
+#define ICBC_FLOAT  1
+#define ICBC_SSE    2
+#define ICBC_SSE2   3
+#define ICBC_AVX1   4
+#define ICBC_AVX2   5
+#define ICBC_AVX512 6
+
+
+// Two vector code paths:
+#define ICBC_USE_SIMD 0         // Original SIMD version. (ICBC_SSE, ICBC_SSE2)
+#define ICBC_USE_VEC 6          // SPMD version. (ICBC_SSE2, ICBC_AVX1, ICBC_AVX2, ICBC_AVX512)
+
+
+#if ICBC_USE_VEC == ICBC_AVX2
+#define ICBC_USE_AVX2_PERMUTE2 0
+#define ICBC_USE_AVX2_PERMUTE 0
+#define ICBC_USE_AVX2_GATHER 0
 #endif
 
-#ifndef ICBC_USE_AVX
-#define ICBC_USE_AVX 2  // 0=scalar, 1=AVX, 2=AVX2
-#if ICBC_USE_AVX == 2
-#define ICBC_USE_AVX2_PERMUTE 0
-#define ICBC_USE_AVX2_GATHER 1
+#if ICBC_USE_VEC == ICBC_AVX512
+#define ICBC_USE_AVX512_PERMUTE 1
 #endif
-#endif
+
 
 #ifndef ICBC_DECODER
 #define ICBC_DECODER 0       // 0 = d3d10, 1 = d3d9, 2 = nvidia, 3 = amd
 #endif
 
 
+#if ICBC_USE_SIMD || ICBC_USE_VEC
+#include <xmmintrin.h>
+#include <emmintrin.h>
+#endif 
+
+#if ICBC_USE_VEC
+#include <immintrin.h>
+#include <zmmintrin.h>
+#endif
+
 // Some testing knobs:
 #define ICBC_FAST_CLUSTER_FIT 0     // This ignores input weights for a moderate speedup.
 #define ICBC_PERFECT_ROUND 0        // Enable perfect rounding in scalar code path only.
-#define ICBC_USE_SAT 0              // Use summed area tables.
+#define ICBC_USE_SAT 1              // Use summed area tables.
 #define ICBC_SAT_INC 1
 
 #include <stdint.h>
@@ -238,10 +260,7 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 #endif
 #endif
 
-#if ICBC_USE_SSE
-
-#include <xmmintrin.h>
-#include <emmintrin.h>
+#if ICBC_USE_SIMD
 
 #define SIMD_INLINE inline
 #define SIMD_NATIVE __forceinline
@@ -403,238 +422,466 @@ SIMD_INLINE bool compareAnyLessThan(SimdVector::Arg left, SimdVector::Arg right)
     return value != 0;
 }
 
-#endif // ICBC_USE_SSE
+#endif // ICBC_USE_SIMD
 
-#if ICBC_USE_AVX
+#if ICBC_USE_VEC == ICBC_FLOAT  // Purely scalar version.
 
-union Wide8 {
-    __m256 v;
-    float e[8];
-};
+#define VEC_SIZE 1
 
-__forceinline Wide8 zero8() {
-    Wide8 r;
-    r.v = _mm256_setzero_ps();
-    return r;
+using Vec = float;
+
+__forceinline float & lane(Vec & v, int i) {
+    return v;
 }
 
-__forceinline Wide8 broadcast8(float a) {
-    Wide8 r;
-    r.v = _mm256_broadcast_ss(&a);
-    return r;
+__forceinline Vec vzero() {
+    return 0.0f;
 }
 
-__forceinline Wide8 load8(float * ptr) {
-    Wide8 r;
-    r.v = _mm256_load_ps(ptr);
-    return r;
+__forceinline Vec vbroadcast(float x) {
+    return x;
 }
 
-__forceinline Wide8 operator+(Wide8 a, Wide8 b) {
-    Wide8 r;
-    r.v = _mm256_add_ps(a.v, b.v);
-    return r;
+__forceinline Vec vload(float * ptr) {
+    return *ptr;
 }
 
-__forceinline Wide8 operator-(Wide8 a, Wide8 b) {
-    Wide8 r;
-    r.v = _mm256_sub_ps(a.v, b.v);
-    return r;
-}
-
-__forceinline Wide8 operator*(Wide8 a, Wide8 b) {
-    Wide8 r;
-    r.v = _mm256_mul_ps(a.v, b.v);
-    return r;
-}
-
-__forceinline Wide8 rcp8(Wide8 a) {
-    Wide8 r;
-    //r.v = _mm256_rcp_ps(a.v);
-    __m256 res = _mm256_rcp_ps(a.v);
-    __m256 muls = _mm256_mul_ps(a.v, _mm256_mul_ps(res, res));
-    r.v = _mm256_sub_ps(_mm256_add_ps(res, res), muls);
-    return r;
+__forceinline Vec vrcp(Vec a) {
+    return 1.0f / a;    // use _mm_rcp_ps ?
 }
 
 // a*b+c
-__forceinline Wide8 mad8(Wide8 a, Wide8 b, Wide8 c) {
+__forceinline Vec vmad(Vec a, Vec b, Vec c) {
+    return a * b + c;
+}
+
+__forceinline Vec vsaturate(Vec a) {
+    return min(max(a, 0.0f), 1.0f);
+}
+
+__forceinline Vec vround(Vec a) {
+    //return _mm_round_ss(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+    return float(int(a + 0.5f));
+}
+
+__forceinline Vec lane_id() {
+    return 0;
+}
+
+using VMask = bool;
+
+__forceinline int to_int(VMask A) {
+    return A;
+}
+
+__forceinline Vec vselect(VMask mask, Vec a, Vec b) {
+    return mask ? b : a;
+}
+
+__forceinline bool all(VMask m) {
+    return m;
+}
+
+__forceinline bool any(VMask m) {
+    return m;
+}
+
+#elif ICBC_USE_VEC == ICBC_SSE2   // @@ Actually SSE4.1 only
+
+#define VEC_SIZE 4
+
+using Vec = __m128;
+
+__forceinline float & lane(Vec & v, int i) {
+    return v.m128_f32[i];
+}
+
+__forceinline Vec vzero() {
+    return _mm_setzero_ps();
+}
+
+__forceinline Vec vbroadcast(float x) {
+    return _mm_broadcast_ss(&x);
+}
+
+__forceinline Vec vload(float * ptr) {
+    return _mm_load_ps(ptr);
+}
+
+__forceinline Vec operator+(Vec a, Vec b) {
+    return _mm_add_ps(a, b);
+}
+
+__forceinline Vec operator-(Vec a, Vec b) {
+    return _mm_sub_ps(a, b);
+}
+
+__forceinline Vec operator*(Vec a, Vec b) {
+    return _mm_mul_ps(a, b);
+}
+
+__forceinline Vec vrcp(Vec a) {
+    Vec res = _mm_rcp_ps(a);
+    auto muls = _mm_mul_ps(a, _mm_mul_ps(res, res));
+    return _mm_sub_ps(_mm_add_ps(res, res), muls);
+}
+
+// a*b+c
+__forceinline Vec vmad(Vec a, Vec b, Vec c) {
+    return a * b + c;
+}
+
+__forceinline Vec vsaturate(Vec a) {
+    auto zero = _mm_setzero_ps();
+    auto one = _mm_set1_ps(1.0f);
+    return _mm_min_ps(_mm_max_ps(a, zero), one);
+}
+
+__forceinline Vec vround(Vec a) {
+    // SSE4.1
+    return _mm_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+}
+
+__forceinline Vec lane_id() {
+    return _mm_set_ps(0, 1, 2, 3); // @@ Is this the right order?
+}
+
+using VMask = __m128;
+
+__forceinline VMask operator> (Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GT_OQ); }
+__forceinline VMask operator>=(Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GE_OQ); }
+__forceinline VMask operator< (Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_LT_OQ); }
+__forceinline VMask operator<=(Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_LE_OQ); }
+
+__forceinline VMask operator| (VMask A, VMask B) { return _mm_or_ps(A, B); }
+__forceinline VMask operator& (VMask A, VMask B) { return _mm_and_ps(A, B); }
+__forceinline VMask operator^ (VMask A, VMask B) { return _mm_xor_ps(A, B); }
+
+__forceinline int to_int(VMask A) {
+    return _mm_movemask_ps(A);
+}
+
+// mask ? b : a
+__forceinline Vec vselect(VMask mask, Vec a, Vec b) {
+    return _mm_or_ps(_mm_andnot_ps(mask, a), _mm_and_ps(mask, b));
+}
+
+__forceinline bool all(VMask m) {
+    auto zero = _mm_setzero_ps();
+    return _mm_testc_ps(_mm_cmp_ps(zero, zero, _CMP_EQ_UQ), m) == 0;
+}
+
+__forceinline bool any(VMask m) {
+    return _mm_testz_ps(m, m) == 0;
+}
+
+#elif ICBC_USE_VEC == ICBC_AVX1 || ICBC_USE_VEC == ICBC_AVX2
+
+#define VEC_SIZE 8
+
+using Vec = __m256;
+
+__forceinline float & lane(Vec & v, int i) {
+    return v.m256_f32[i];
+}
+
+__forceinline Vec vzero() {
+    return _mm256_setzero_ps();
+}
+
+__forceinline Vec vbroadcast(float a) {
+    return _mm256_broadcast_ss(&a);
+}
+
+__forceinline Vec vload(float * ptr) {
+    return _mm256_load_ps(ptr);
+}
+
+__forceinline Vec operator+(Vec a, Vec b) {
+    return _mm256_add_ps(a, b);
+}
+
+__forceinline Vec operator-(Vec a, Vec b) {
+    return _mm256_sub_ps(a, b);
+}
+
+__forceinline Vec operator*(Vec a, Vec b) {
+    return _mm256_mul_ps(a, b);
+}
+
+// @@ Acording to Rich rcp is not deterministic (different precision on Intel and AMD).
+__forceinline Vec vrcp(Vec a) {
+    __m256 res = _mm256_rcp_ps(a);
+    __m256 muls = _mm256_mul_ps(a, _mm256_mul_ps(res, res));
+    return _mm256_sub_ps(_mm256_add_ps(res, res), muls);
+}
+
+// a*b+c
+__forceinline Vec vmad(Vec a, Vec b, Vec c) {
     // @@ AVX does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
-    Wide8 r;
-    r.v = _mm256_fmadd_ps(a.v, b.v, c.v);
-    return r;
+    return _mm256_fmadd_ps(a, b, c);
     //return ((a * b) + c);
 }
 
-__forceinline Wide8 saturate8(Wide8 a) {
-    Wide8 r;
+__forceinline Vec vsaturate(Vec a) {
     __m256 zero = _mm256_setzero_ps();
     __m256 one = _mm256_set1_ps(1.0f);
-    r.v = _mm256_min_ps(_mm256_max_ps(a.v, zero), one);
-    return r;
+    return _mm256_min_ps(_mm256_max_ps(a, zero), one);
 }
 
-__forceinline Wide8 round8(Wide8 a) {
-    Wide8 r;
-    r.v = _mm256_round_ps(a.v, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-    return r;
+__forceinline Vec vround(Vec a) {
+    return _mm256_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+}
+
+
+__forceinline Vec lane_id() {
+    return _mm256_set_ps(0, 1, 2, 3, 4, 5, 6, 7); // @@ Is this the right order?
 }
 
 
 // Emulate mask vector using packed float.
 
-using Mask8 = __m256;
-//using Mask8 = __mmask8; // Only AVX2:
+using VMask = __m256;
 
-__forceinline Mask8 operator> (Wide8 A, Wide8 B) { return _mm256_cmp_ps(A.v, B.v, _CMP_GT_OQ); }
-__forceinline Mask8 operator>=(Wide8 A, Wide8 B) { return _mm256_cmp_ps(A.v, B.v, _CMP_GE_OQ); }
-__forceinline Mask8 operator< (Wide8 A, Wide8 B) { return _mm256_cmp_ps(A.v, B.v, _CMP_LT_OQ); }
-__forceinline Mask8 operator<=(Wide8 A, Wide8 B) { return _mm256_cmp_ps(A.v, B.v, _CMP_LE_OQ); }
+__forceinline VMask operator> (Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GT_OQ); }
+__forceinline VMask operator>=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GE_OQ); }
+__forceinline VMask operator< (Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_LT_OQ); }
+__forceinline VMask operator<=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_LE_OQ); }
 
-__forceinline Mask8 operator| (Mask8 A, Mask8 B) { return _mm256_or_ps(A, B); }
-__forceinline Mask8 operator& (Mask8 A, Mask8 B) { return _mm256_and_ps(A, B); }
-__forceinline Mask8 operator^ (Mask8 A, Mask8 B) { return _mm256_xor_ps(A, B); }
+__forceinline VMask operator| (VMask A, VMask B) { return _mm256_or_ps(A, B); }
+__forceinline VMask operator& (VMask A, VMask B) { return _mm256_and_ps(A, B); }
+__forceinline VMask operator^ (VMask A, VMask B) { return _mm256_xor_ps(A, B); }
 
-__forceinline uint8 to_u8(Mask8 A) {
+__forceinline int to_int(VMask A) {
     return _mm256_movemask_ps(A);
 }
 
-// mask ? a : b
-__forceinline Wide8 select8(Mask8 mask, Wide8 a, Wide8 b) {
-    Wide8 r;
-    //r.v = _mm256_or_ps(_mm256_andnot_ps(mask, a.v), _mm256_and_ps(mask, b.v));
-    r.v = _mm256_blendv_ps(a.v, b.v, mask);
-    return r;
+// mask ? b : a
+__forceinline Vec vselect(VMask mask, Vec a, Vec b) {
+    return _mm256_blendv_ps(a, b, mask);
 }
 
-__forceinline Wide8 lid8() {
-    Wide8 r{ _mm256_set_ps(0, 1, 2, 3, 4, 5, 6, 7) };
-    return r;
-}
-
-__forceinline Wide8 tid8(int base) {
-    return broadcast8(float(base)) + lid8();
-}
-
-
-
-__forceinline bool all(Mask8 m) {
+__forceinline bool all(VMask m) {
     __m256 zero = _mm256_setzero_ps();
     return _mm256_testc_ps(_mm256_cmp_ps(zero, zero, _CMP_EQ_UQ), m) == 0;
 }
 
-__forceinline bool any(Mask8 m) {
+__forceinline bool any(VMask m) {
     return _mm256_testz_ps(m, m) == 0;
 }
 
-struct Vector3_Wide8 {
-    Wide8 x;
-    Wide8 y;
-    Wide8 z;
+#elif ICBC_USE_VEC == ICBC_AVX512
+
+#define VEC_SIZE 16
+
+using Vec = __m512;
+
+//using VMask = __mmask16;
+struct VMask {
+    __mmask16 m;
 };
 
-__forceinline Vector3_Wide8 broadcast8(Vector3 v) {
-    Vector3_Wide8 v8;
-    v8.x = broadcast8(v.x);
-    v8.y = broadcast8(v.y);
-    v8.z = broadcast8(v.z);
+__forceinline float & lane(Vec & v, int i) {
+    return v.m512_f32[i];
+}
+
+__forceinline Vec vzero() {
+    return _mm512_setzero_ps();
+}
+
+__forceinline Vec vbroadcast(float a) {
+    return _mm512_set1_ps(a);
+}
+
+__forceinline Vec vload(float * ptr) {
+    return _mm512_load_ps(ptr);
+}
+
+__forceinline Vec vload(VMask mask, float * ptr) {
+    return _mm512_mask_load_ps(_mm512_undefined(), mask.m, ptr);
+}
+
+__forceinline Vec vload(VMask mask, float * ptr, float fallback) {
+    return _mm512_mask_load_ps(_mm512_set1_ps(fallback), mask.m, ptr);
+}
+
+__forceinline Vec operator+(Vec a, Vec b) {
+    return _mm512_add_ps(a, b);
+}
+
+__forceinline Vec operator-(Vec a, Vec b) {
+    return _mm512_sub_ps(a, b);
+}
+
+__forceinline Vec operator*(Vec a, Vec b) {
+    return _mm512_mul_ps(a, b);
+}
+
+__forceinline Vec vrcp(Vec a) {
+    // @@ Use an aproximation?
+    return _mm512_div_ps(vbroadcast(1.0f), a);
+}
+
+// a*b+c
+__forceinline Vec vmad(Vec a, Vec b, Vec c) {
+    return _mm512_fmadd_ps(a, b, c);
+}
+
+__forceinline Vec vsaturate(Vec a) {
+    auto zero = _mm512_setzero_ps();
+    auto one = _mm512_set1_ps(1.0f);
+    return _mm512_min_ps(_mm512_max_ps(a, zero), one);
+}
+
+__forceinline Vec vround(Vec a) {
+    return _mm512_roundscale_ps(a, _MM_FROUND_TO_NEAREST_INT);
+}
+
+
+__forceinline Vec lane_id() {
+    return _mm512_set_ps(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
+}
+
+
+__forceinline VMask operator> (Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GT_OQ) }; }
+__forceinline VMask operator>=(Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GE_OQ) }; }
+__forceinline VMask operator< (Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LT_OQ) }; }
+__forceinline VMask operator<=(Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LE_OQ) }; }
+
+__forceinline VMask operator! (VMask A) { return { _mm512_knot(A.m) }; }
+__forceinline VMask operator| (VMask A, VMask B) { return { _mm512_kor(A.m, B.m) }; }
+__forceinline VMask operator& (VMask A, VMask B) { return { _mm512_kand(A.m, B.m) }; }
+__forceinline VMask operator^ (VMask A, VMask B) { return { _mm512_kxor(A.m, B.m) }; }
+
+__forceinline int to_int(VMask A) {
+    return (int)A.m;
+}
+
+// mask ? b : a
+__forceinline Vec vselect(VMask mask, Vec a, Vec b) {
+    return _mm512_mask_blend_ps(mask.m, a, b);
+}
+
+__forceinline bool all(VMask mask) {
+    return mask.m == 0xFFFFFFFF;
+}
+
+__forceinline bool any(VMask mask) {
+    return mask.m != 0;
+}
+
+#endif // ICBC_AVX512
+
+#if ICBC_USE_VEC
+
+struct Vector3_Vec {
+    Vec x;
+    Vec y;
+    Vec z;
+};
+
+__forceinline Vector3_Vec vbroadcast(Vector3 v) {
+    Vector3_Vec v8;
+    v8.x = vbroadcast(v.x);
+    v8.y = vbroadcast(v.y);
+    v8.z = vbroadcast(v.z);
     return v8;
 }
 
-__forceinline Vector3_Wide8 broadcast8(float x, float y, float z) {
-    Vector3_Wide8 v8;
-    v8.x = broadcast8(x);
-    v8.y = broadcast8(y);
-    v8.z = broadcast8(z);
+__forceinline Vector3_Vec vbroadcast(float x, float y, float z) {
+    Vector3_Vec v8;
+    v8.x = vbroadcast(x);
+    v8.y = vbroadcast(y);
+    v8.z = vbroadcast(z);
     return v8;
 }
 
 
-__forceinline Vector3_Wide8 operator+(Vector3_Wide8 a, Vector3_Wide8 b) {
-    Vector3_Wide8 v8;
+__forceinline Vector3_Vec operator+(Vector3_Vec a, Vector3_Vec b) {
+    Vector3_Vec v8;
     v8.x = (a.x + b.x);
     v8.y = (a.y + b.y);
     v8.z = (a.z + b.z);
     return v8;
 }
 
-__forceinline Vector3_Wide8 operator-(Vector3_Wide8 a, Vector3_Wide8 b) {
-    Vector3_Wide8 v8;
+__forceinline Vector3_Vec operator-(Vector3_Vec a, Vector3_Vec b) {
+    Vector3_Vec v8;
     v8.x = (a.x - b.x);
     v8.y = (a.y - b.y);
     v8.z = (a.z - b.z);
     return v8;
 }
 
-__forceinline Vector3_Wide8 operator*(Vector3_Wide8 a, Vector3_Wide8 b) {
-    Vector3_Wide8 v8;
+__forceinline Vector3_Vec operator*(Vector3_Vec a, Vector3_Vec b) {
+    Vector3_Vec v8;
     v8.x = (a.x * b.x);
     v8.y = (a.y * b.y);
     v8.z = (a.z * b.z);
     return v8;
 }
 
-__forceinline Vector3_Wide8 operator*(Vector3_Wide8 a, Wide8 b) {
-    Vector3_Wide8 v8;
+__forceinline Vector3_Vec operator*(Vector3_Vec a, Vec b) {
+    Vector3_Vec v8;
     v8.x = (a.x * b);
     v8.y = (a.y * b);
     v8.z = (a.z * b);
     return v8;
 }
 
-__forceinline Vector3_Wide8 mad8(Vector3_Wide8 a, Vector3_Wide8 b, Vector3_Wide8 c) {
-    Vector3_Wide8 v8;
-    v8.x = mad8(a.x, b.x, c.x);
-    v8.y = mad8(a.y, b.y, c.y);
-    v8.z = mad8(a.z, b.z, c.z);
+__forceinline Vector3_Vec vmad(Vector3_Vec a, Vector3_Vec b, Vector3_Vec c) {
+    Vector3_Vec v8;
+    v8.x = vmad(a.x, b.x, c.x);
+    v8.y = vmad(a.y, b.y, c.y);
+    v8.z = vmad(a.z, b.z, c.z);
     return v8;
 }
 
-__forceinline Vector3_Wide8 mad8(Vector3_Wide8 a, Wide8 b, Vector3_Wide8 c) {
-    Vector3_Wide8 v8;
-    v8.x = mad8(a.x, b, c.x);
-    v8.y = mad8(a.y, b, c.y);
-    v8.z = mad8(a.z, b, c.z);
+__forceinline Vector3_Vec vmad(Vector3_Vec a, Vec b, Vector3_Vec c) {
+    Vector3_Vec v8;
+    v8.x = vmad(a.x, b, c.x);
+    v8.y = vmad(a.y, b, c.y);
+    v8.z = vmad(a.z, b, c.z);
     return v8;
 }
 
-__forceinline Vector3_Wide8 saturate8(Vector3_Wide8 v) {
-    Vector3_Wide8 r;
-    r.x = saturate8(v.x);
-    r.y = saturate8(v.y);
-    r.z = saturate8(v.z);
+__forceinline Vector3_Vec vsaturate(Vector3_Vec v) {
+    Vector3_Vec r;
+    r.x = vsaturate(v.x);
+    r.y = vsaturate(v.y);
+    r.z = vsaturate(v.z);
     return r;
 }
 
-__forceinline Vector3_Wide8 round_ept8(Vector3_Wide8 v) {
-    const Wide8 rb_scale = broadcast8(31.0f);
-    const Wide8 rb_inv_scale = broadcast8(1.0f / 31.0f);
-    const Wide8 g_scale = broadcast8(63.0f);
-    const Wide8 g_inv_scale = broadcast8(1.0f / 63.0f);
+__forceinline Vector3_Vec vround_ept(Vector3_Vec v) {
+    const Vec rb_scale = vbroadcast(31.0f);
+    const Vec rb_inv_scale = vbroadcast(1.0f / 31.0f);
+    const Vec g_scale = vbroadcast(63.0f);
+    const Vec g_inv_scale = vbroadcast(1.0f / 63.0f);
 
-    Vector3_Wide8 r;
-    r.x = round8(v.x * rb_scale) * rb_inv_scale;
-    r.y = round8(v.y * g_scale) * g_inv_scale;
-    r.z = round8(v.z * rb_scale) * rb_inv_scale;
+    Vector3_Vec r;
+    r.x = vround(v.x * rb_scale) * rb_inv_scale;
+    r.y = vround(v.y * g_scale) * g_inv_scale;
+    r.z = vround(v.z * rb_scale) * rb_inv_scale;
     return r;
 }
 
-__forceinline Wide8 dot8(Vector3_Wide8 a, Vector3_Wide8 b) {
-    Wide8 r;
+__forceinline Vec vdot(Vector3_Vec a, Vector3_Vec b) {
+    Vec r;
     r = a.x * b.x + a.y * b.y + a.z * b.z;
     return r;
 }
 
-// mask ? a : b
-__forceinline Vector3_Wide8 select8(Mask8 mask, Vector3_Wide8 a, Vector3_Wide8 b) {
-    Vector3_Wide8 r;
-    r.x = select8(mask, a.x, b.x);
-    r.y = select8(mask, a.y, b.y);
-    r.z = select8(mask, a.z, b.z);
+// mask ? b : a
+__forceinline Vector3_Vec vselect(VMask mask, Vector3_Vec a, Vector3_Vec b) {
+    Vector3_Vec r;
+    r.x = vselect(mask, a.x, b.x);
+    r.y = vselect(mask, a.y, b.y);
+    r.z = vselect(mask, a.z, b.z);
     return r;
 }
 
-#endif // ICBC_USE_AVX
+#endif // ICBC_USE_VEC
 
 
 
@@ -811,7 +1058,7 @@ private:
 
     uint m_count;
 
-#if ICBC_USE_SSE
+#if ICBC_USE_SIMD
     ICBC_ALIGN_16 SimdVector m_colors[16];  // color | weight
     SimdVector m_metric;                    // vec3
     SimdVector m_metricSqr;                 // vec3
@@ -923,7 +1170,7 @@ static Vector3 computePrincipalComponent_PowerMethod(int n, const Vector3 *__res
 
 void ClusterFit::setErrorMetric(const Vector3 & metric)
 {
-#if ICBC_USE_SSE
+#if ICBC_USE_SIMD
     ICBC_ALIGN_16 Vector4 tmp;
     tmp.xyz = metric;
     tmp.w = 1;
@@ -972,7 +1219,7 @@ void ClusterFit::setColorSet(const Vector3 * colors, const float * weights, int 
     }*/
 
     // weight all the points
-#if ICBC_USE_SSE
+#if ICBC_USE_SIMD
     m_xxsum = SimdVector(0.0f);
     m_xsum = SimdVector(0.0f);
 #else
@@ -984,7 +1231,7 @@ void ClusterFit::setColorSet(const Vector3 * colors, const float * weights, int 
     for (uint i = 0; i < m_count; ++i)
     {
         int p = order[i];
-#if ICBC_USE_SSE
+#if ICBC_USE_SIMD
         ICBC_ALIGN_16 Vector4 tmp;
         tmp.xyz = colors[p];
         tmp.w = 1;
@@ -1036,7 +1283,7 @@ void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
     }
 
     // weight all the points
-#if ICBC_USE_SSE
+#if ICBC_USE_SIMD
     m_xxsum = SimdVector(0.0f);
     m_xsum = SimdVector(0.0f);
 #else
@@ -1048,7 +1295,7 @@ void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
     for (uint i = 0; i < 16; ++i)
     {
         int p = order[i];
-#if ICBC_USE_SSE
+#if ICBC_USE_SIMD
         ICBC_ALIGN_16 Vector4 tmp;
         tmp.xyz = colors[p].xyz;
         tmp.w = 1;
@@ -1145,8 +1392,8 @@ struct Combinations {
 
 static ICBC_ALIGN_16 int s_fourClusterTotal[16];
 static ICBC_ALIGN_16 int s_threeClusterTotal[16];
-static ICBC_ALIGN_16 Combinations s_fourCluster[968];
-static ICBC_ALIGN_16 Combinations s_threeCluster[152];
+static ICBC_ALIGN_16 Combinations s_fourCluster[968 + 8];
+static ICBC_ALIGN_16 Combinations s_threeCluster[152 + 8];
 
 static void init_cluster_tables() {
 
@@ -1182,8 +1429,8 @@ static void init_cluster_tables() {
     }
 
     // Replicate last entry.
-    for (int i = 0; i < 7; i++) {
-        s_fourCluster[969 + i] = s_fourCluster[969-1];
+    for (int i = 0; i < 8; i++) {
+        s_fourCluster[968 + i] = s_fourCluster[968-1];
     }
 
     for (int t = 1, i = 0; t <= 16; t++) {
@@ -1214,10 +1461,25 @@ static void init_cluster_tables() {
         s_threeClusterTotal[t - 1] = i;
     }
 
+    // Replicate last entry.
+    for (int i = 0; i < 8; i++) {
+        s_threeCluster[152 + i] = s_threeCluster[152 - 1];
+    }
+
+    for (int i = 0; i < 16; i++) {
+        printf("%d, ", s_fourClusterTotal[i] + 1);
+    }
+    printf("\n");
+
+    for (int i = 0; i < 16; i++) {
+        printf("%d, ", s_threeClusterTotal[i] + 1);
+    }
+    printf("\n\n");
+
 }
 
 
-#if ICBC_USE_SSE
+#if ICBC_USE_SIMD
 
 void ClusterFit::compress3(Vector3 * start, Vector3 * end)
 {
@@ -1709,7 +1971,7 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
     Vector3 bestend = { 0.0f };
     float besterror = FLT_MAX;
 
-#if ICBC_USE_AVX
+#if ICBC_USE_VEC
 
 // @@ Use the same SAT for both methods.
 #if ICBC_USE_AVX2_GATHER
@@ -1751,85 +2013,204 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
     }
 #endif
 
-    Wide8 besterror8 = broadcast8(FLT_MAX);
-    Vector3_Wide8 beststart8 = { zero8(), zero8(), zero8() };
-    Vector3_Wide8 bestend8 = { zero8(), zero8(), zero8() };
+    Vec vbesterror = vbroadcast(FLT_MAX);
+    Vector3_Vec vbeststart = { vzero(), vzero(), vzero() };
+    Vector3_Vec vbestend = { vzero(), vzero(), vzero() };
 
     // check all possible clusters for this total order
     const int total_order_count = s_threeClusterTotal[count - 1];
 
-    for (int i = 0; i < total_order_count; i += 8)
+    for (int i = 0; i < total_order_count; i += VEC_SIZE)
     {
-        Vector3_Wide8 x0, x1;
-        Wide8 w0, w1;
+        Vector3_Vec x0, x1;
+        Vec w0, w1;
 
-#if ICBC_USE_AVX2_PERMUTE
+#if ICBC_USE_AVX512_PERMUTE
+
+        // Load sat in one register:
+        Vec vrsat = vload(r_sat);
+        Vec vgsat = vload(g_sat);
+        Vec vbsat = vload(b_sat);
+        Vec vwsat = vload(w_sat);
+
+        // Load 4 uint8 per lane.
+        __m512i packedClusterIndex = _mm512_load_si512((__m512i *)&s_threeCluster[i]);
+
+        // Load index and decrement.
+        auto c0 = _mm512_and_epi32(packedClusterIndex, _mm512_set1_epi32(0xFF));
+        auto c0mask = _mm512_cmpgt_epi32_mask(c0, _mm512_setzero_si512());
+        c0 = _mm512_sub_epi32(c0, _mm512_set1_epi32(1));
+
+        // if upper bit set, zero, otherwise load sat entry.
+        x0.x = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vrsat));
+        x0.y = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vgsat));
+        x0.z = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vbsat));
+        w0 = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vwsat));
+
+        auto c1 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 8), _mm512_set1_epi32(0xFF));
+        auto c1mask = _mm512_cmpgt_epi32_mask(c1, _mm512_setzero_si512());
+        c1 = _mm512_sub_epi32(c1, _mm512_set1_epi32(1));
+
+        x1.x = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vrsat));
+        x1.y = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vgsat));
+        x1.z = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vbsat));
+        w1 = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vwsat));
+
+#elif ICBC_USE_AVX2_PERMUTE2
+        // Fabian Giesen says not to mix _mm256_blendv_ps and _mm256_permutevar8x32_ps since they contend for the same resources and instead emulate blendv using bit ops.
+
         // Load 4 uint8 per lane.
         __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_threeCluster[i]);
 
         if (count <= 8) {
+
             // Load r_sat in one register:
-            Wide8 r07 = load8(r_sat);
-            Wide8 g07 = load8(g_sat);
-            Wide8 b07 = load8(b_sat);
-            Wide8 w07 = load8(w_sat);
+            Vec r07 = vload(r_sat);
+            Vec g07 = vload(g_sat);
+            Vec b07 = vload(b_sat);
+            Vec w07 = vload(w_sat);
 
             // Load index and decrement.
-            auto c0 = _mm256_sub_epi32(_mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
+            auto c0mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
+            c0 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
 
             // if upper bit set, zero, otherwise load sat entry.
-            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x0.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c0), c0mask);
+            x0.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c0), c0mask);
+            x0.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c0), c0mask);
+            w0 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c0), c0mask);
 
-            auto c1 = _mm256_sub_epi32(_mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
+            auto c1mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c1, _mm256_setzero_si256()));
+            c1 = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
 
-            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            x1.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c1), c1mask);
+            x1.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c1), c1mask);
+            x1.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c1), c1mask);
+            w1 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c1), c1mask);
+
         }
         else {
+            //lo = vload(tab);
+            //upxor = vload(tab + 8) ^ lo;
+            //permute_ind = unpacked_ind - 1;
+            //lookup = permutevar8x32(lo, permute_ind);
+            //is_upper = permute_ind > 7;
+            //lookup ^= permutevar8x32(upxor, permute_ind) & is_upper;
+            //lookup &= unpacked_ind > 0;
+
             // Load r_sat in two registers:
-            Wide8 rLo = load8(r_sat); Wide8 rUp = load8(r_sat + 8);
-            Wide8 gLo = load8(g_sat); Wide8 gUp = load8(g_sat + 8);
-            Wide8 bLo = load8(b_sat); Wide8 bUp = load8(b_sat + 8);
-            Wide8 wLo = load8(w_sat); Wide8 wUp = load8(w_sat + 8);
+            Vec rLo = vload(r_sat); Vec rHi = vload(r_sat + 8);
+            Vec gLo = vload(g_sat); Vec gHi = vload(g_sat + 8);
+            Vec bLo = vload(b_sat); Vec bHi = vload(b_sat + 8);
+            Vec wLo = vload(w_sat); Vec wHi = vload(w_sat + 8);
 
             auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
             auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
 
             // if upper bit set, zero, otherwise load sat entry.
-            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
 
-            auto c0Up = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
+            auto c0Hi = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
 
             // if upper bit set, same, otherwise load sat entry.
-            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c0Up), x0.x.v, _mm256_castsi256_ps(c0Up));
-            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c0Up), x0.y.v, _mm256_castsi256_ps(c0Up));
-            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c0Up), x0.z.v, _mm256_castsi256_ps(c0Up));
-            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c0Up), w0.v, _mm256_castsi256_ps(c0Up));
+            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c0Hi), x0.x, _mm256_castsi256_ps(c0Hi));
+            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c0Hi), x0.y, _mm256_castsi256_ps(c0Hi));
+            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c0Hi), x0.z, _mm256_castsi256_ps(c0Hi));
+            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c0Hi), w0, _mm256_castsi256_ps(c0Hi));
 
             auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
             auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
 
             // if upper bit set, zero, otherwise load sat entry.
-            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
 
-            auto c1Up = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
+            auto c1Hi = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
 
             // if upper bit set, same, otherwise load sat entry.
-            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c1Up), x1.x.v, _mm256_castsi256_ps(c1Up));
-            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c1Up), x1.y.v, _mm256_castsi256_ps(c1Up));
-            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c1Up), x1.z.v, _mm256_castsi256_ps(c1Up));
-            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c1Up), w1.v, _mm256_castsi256_ps(c1Up));
+            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c1Hi), x1.x, _mm256_castsi256_ps(c1Hi));
+            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c1Hi), x1.y, _mm256_castsi256_ps(c1Hi));
+            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c1Hi), x1.z, _mm256_castsi256_ps(c1Hi));
+            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
+        }
+
+#elif ICBC_USE_AVX2_PERMUTE
+        // Load 4 uint8 per lane.
+        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_threeCluster[i]);
+
+        if (count <= 8) {
+
+            // Load index and decrement.
+            auto c0 = _mm256_sub_epi32(_mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+            auto c1 = _mm256_sub_epi32(_mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+
+            // Load sat in one register.
+            // if upper bit set, zero, otherwise load sat entry.
+
+            Vec r07 = vload(r_sat);
+            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+
+            Vec g07 = vload(g_sat);
+            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+
+            Vec b07 = vload(b_sat);
+            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+
+            Vec w07 = vload(w_sat);
+            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+
+        }
+        else {
+            // Load r_sat in two registers:
+            Vec rLo = vload(r_sat); Vec rHi = vload(r_sat + 8);
+            Vec gLo = vload(g_sat); Vec gHi = vload(g_sat + 8);
+            Vec bLo = vload(b_sat); Vec bHi = vload(b_sat + 8);
+            Vec wLo = vload(w_sat); Vec wHi = vload(w_sat + 8);
+
+            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
+            auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+
+            auto c0Hi = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
+
+            // if upper bit set, same, otherwise load sat entry.
+            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c0Hi), x0.x, _mm256_castsi256_ps(c0Hi));
+            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c0Hi), x0.y, _mm256_castsi256_ps(c0Hi));
+            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c0Hi), x0.z, _mm256_castsi256_ps(c0Hi));
+            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c0Hi), w0, _mm256_castsi256_ps(c0Hi));
+
+            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
+            auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+
+            auto c1Hi = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
+
+            // if upper bit set, same, otherwise load sat entry.
+            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c1Hi), x1.x, _mm256_castsi256_ps(c1Hi));
+            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c1Hi), x1.y, _mm256_castsi256_ps(c1Hi));
+            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c1Hi), x1.z, _mm256_castsi256_ps(c1Hi));
+            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
         }
 
 #elif ICBC_USE_AVX2_GATHER
@@ -1843,98 +2224,98 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
         __m256i c0 = _mm256_slli_epi32(packedClusterIndex, 2);
         c0 = _mm256_and_si256(c0, _mm256_set1_epi32(0x3FC));
 
-        x0.x.v = _mm256_i32gather_ps(base + 0, c0, 4);
-        x0.y.v = _mm256_i32gather_ps(base + 1, c0, 4);
-        x0.z.v = _mm256_i32gather_ps(base + 2, c0, 4);
-        w0.v = _mm256_i32gather_ps(base + 3, c0, 4);
+        x0.x = _mm256_i32gather_ps(base + 0, c0, 4);
+        x0.y = _mm256_i32gather_ps(base + 1, c0, 4);
+        x0.z = _mm256_i32gather_ps(base + 2, c0, 4);
+        w0 = _mm256_i32gather_ps(base + 3, c0, 4);
 
         __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 6), _mm256_set1_epi32(0x3FC));
-        x1.x.v = _mm256_i32gather_ps(base + 0, c1, 4);
-        x1.y.v = _mm256_i32gather_ps(base + 1, c1, 4);
-        x1.z.v = _mm256_i32gather_ps(base + 2, c1, 4);
-        w1.v = _mm256_i32gather_ps(base + 3, c1, 4);
+        x1.x = _mm256_i32gather_ps(base + 0, c1, 4);
+        x1.y = _mm256_i32gather_ps(base + 1, c1, 4);
+        x1.z = _mm256_i32gather_ps(base + 2, c1, 4);
+        w1 = _mm256_i32gather_ps(base + 3, c1, 4);
 
 #else
-        // Plain AVX1 path
-        x0.x = zero8(); x0.y = zero8(); x0.z = zero8(); w0 = zero8();
-        x1.x = zero8(); x1.y = zero8(); x1.z = zero8(); w1 = zero8();
+        // Plain scalar path
+        x0.x = vzero(); x0.y = vzero(); x0.z = vzero(); w0 = vzero();
+        x1.x = vzero(); x1.y = vzero(); x1.z = vzero(); w1 = vzero();
 
-        for (int l = 0; l < 8; l++) {
+        for (int l = 0; l < VEC_SIZE; l++) {
             uint c0 = s_threeCluster[i + l].c0;
             if (c0) {
                 c0 -= 1;
-                x0.x.e[l] = r_sat[c0];
-                x0.y.e[l] = g_sat[c0];
-                x0.z.e[l] = b_sat[c0];
-                w0.e[l] = w_sat[c0];
+                lane(x0.x, l) = r_sat[c0];
+                lane(x0.y, l) = g_sat[c0];
+                lane(x0.z, l) = b_sat[c0];
+                lane(w0, l) = w_sat[c0];
             }
 
             uint c1 = s_threeCluster[i + l].c1;
             if (c1) {
                 c1 -= 1;
-                x1.x.e[l] = r_sat[c1];
-                x1.y.e[l] = g_sat[c1];
-                x1.z.e[l] = b_sat[c1];
-                w1.e[l] = w_sat[c1];
+                lane(x1.x, l) = r_sat[c1];
+                lane(x1.y, l) = g_sat[c1];
+                lane(x1.z, l) = b_sat[c1];
+                lane(w1, l) = w_sat[c1];
             }
         }
 #endif
 
-        Wide8 w2 = broadcast8(m_wsum) - w1;
+        Vec w2 = vbroadcast(m_wsum) - w1;
         x1 = x1 - x0;
         w1 = w1 - w0;
 
-        Wide8 alphabeta_sum = w1 * broadcast8(0.25f);
-        Wide8 alpha2_sum = w0 + alphabeta_sum;
-        Wide8 beta2_sum = w2 + alphabeta_sum;
-        Wide8 factor = rcp8(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+        Vec alphabeta_sum = w1 * vbroadcast(0.25f);
+        Vec alpha2_sum = w0 + alphabeta_sum;
+        Vec beta2_sum = w2 + alphabeta_sum;
+        Vec factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
 
-        Vector3_Wide8 alphax_sum = x0 + x1 * broadcast8(0.5f);
-        Vector3_Wide8 betax_sum = broadcast8(m_xsum) - alphax_sum;
+        Vector3_Vec alphax_sum = x0 + x1 * vbroadcast(0.5f);
+        Vector3_Vec betax_sum = vbroadcast(m_xsum) - alphax_sum;
 
-        Vector3_Wide8 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
-        Vector3_Wide8 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+        Vector3_Vec a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
+        Vector3_Vec b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
 
         // clamp to the grid
-        a = saturate8(a);
-        b = saturate8(b);
-        a = round_ept8(a);
-        b = round_ept8(b);
+        a = vsaturate(a);
+        b = vsaturate(b);
+        a = vround_ept(a);
+        b = vround_ept(b);
 
         // compute the error
-        Vector3_Wide8 e1 = mad8(a * a, alpha2_sum, mad8(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * broadcast8(2.0f)));
+        Vector3_Vec e1 = vmad(a * a, alpha2_sum, vmad(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * vbroadcast(2.0f)));
 
         // apply the metric to the error term
-        //Wide8 error = dot8(e1, broadcast8(m_metricSqr));
-        Wide8 error = e1.x + e1.y + e1.z;//(e1, broadcast8(m_metricSqr));
+        //Vec error = vdot(e1, vbroadcast(m_metricSqr));
+        Vec error = e1.x + e1.y + e1.z;//(e1, vbroadcast(m_metricSqr));
 
         // keep the solution if it wins
-        auto mask = (error < besterror8);
+        auto mask = (error < vbesterror);
 
         // We could mask the unused lanes here, but instead set the invalid SAT entries to FLT_MAX.
-        //mask = (mask & (broadcast8(total_order_count) >= tid8(i))); // This doesn't seem to help. Is it OK to consider elements out of bounds?
+        //mask = (mask & (vbroadcast(total_order_count) >= tid8(i))); // This doesn't seem to help. Is it OK to consider elements out of bounds?
 
-        besterror8 = select8(mask, besterror8, error);
-        beststart8 = select8(mask, beststart8, a);
-        bestend8 = select8(mask, bestend8, b);
+        vbesterror = vselect(mask, vbesterror, error);
+        vbeststart = vselect(mask, vbeststart, a);
+        vbestend = vselect(mask, vbestend, b);
     }
 
     // Is there a better way to do this reduction?
     int bestindex;
-    for (int i = 0; i < 8; i++) {
-        if (besterror8.e[i] < besterror) {
-            besterror = besterror8.e[i];
+    for (int i = 0; i < VEC_SIZE; i++) {
+        if (lane(vbesterror, i) < besterror) {
+            besterror = lane(vbesterror, i);
             bestindex = i;
         }
     }
-    beststart.x = beststart8.x.e[bestindex];
-    beststart.y = beststart8.y.e[bestindex];
-    beststart.z = beststart8.z.e[bestindex];
-    bestend.x = bestend8.x.e[bestindex];
-    bestend.y = bestend8.y.e[bestindex];
-    bestend.z = bestend8.z.e[bestindex];
+    beststart.x = lane(vbeststart.x, bestindex);
+    beststart.y = lane(vbeststart.y, bestindex);
+    beststart.z = lane(vbeststart.z, bestindex);
+    bestend.x = lane(vbestend.x, bestindex);
+    bestend.y = lane(vbestend.y, bestindex);
+    bestend.z = lane(vbestend.z, bestindex);
 
-#else
+#else // ICBC_USE_VEC
 
     Vector3 x0 = { 0.0f };
     float w0 = 0.0f;
@@ -2007,15 +2388,15 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
     const Vector3 gridrcp = { 1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f };
 
     // declare variables
+    float besterror = FLT_MAX;
     Vector3 beststart = { 0.0f };
     Vector3 bestend = { 0.0f };
-    float besterror = FLT_MAX;
 
-#if ICBC_USE_AVX
+#if ICBC_USE_VEC
 
     // @@ Use the same SAT for both methods.
     // This could be done in set colors and shared for both compress3 and compress4.
-#if ICBC_USE_AVX2_GATHER
+#if ICBC_USE_AVX2_GATHER && 1 // Masked gathers.
     ICBC_ALIGN_16 Vector4 x_sat[17];
     ICBC_ALIGN_16 Vector4 x_sum = { 0 };
     for (uint i = 0; i < count; i++) {
@@ -2053,109 +2434,275 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
     }
 #endif
 
-    Wide8 besterror8 = broadcast8(FLT_MAX);
-    Vector3_Wide8 beststart8 = { zero8(), zero8(), zero8() };
-    Vector3_Wide8 bestend8 = { zero8(), zero8(), zero8() };
+    Vec vbesterror = vbroadcast(FLT_MAX);
+    Vector3_Vec vbeststart = { vzero(), vzero(), vzero() };
+    Vector3_Vec vbestend = { vzero(), vzero(), vzero() };
 
     // check all possible clusters for this total order
     const int total_order_count = s_fourClusterTotal[count - 1];
 
-    for (int i = 0; i < total_order_count; i += 8)
+    for (int i = 0; i < total_order_count; i += VEC_SIZE)
     {
-        Vector3_Wide8 x0, x1, x2;
-        Wide8 w0, w1, w2;
+        Vector3_Vec x0, x1, x2;
+        Vec w0, w1, w2;
 
-#if ICBC_USE_AVX2_PERMUTE
+        /*
+        // Another approach would be to load and broadcast one color at a time like we do in CUDA.
+        uint akku = 0;
+
+        // Compute alpha & beta for this permutation.
+        #pragma unroll
+        for (int i = 0; i < 16; i++)
+        {
+            const uint bits = permutation >> (2*i);
+
+            alphax_sum += alphaTable4[bits & 3] * colors[i];
+            akku += prods4[bits & 3];
+        }
+
+        float alpha2_sum = float(akku >> 16);
+        float beta2_sum = float((akku >> 8) & 0xff);
+        float alphabeta_sum = float(akku & 0xff);
+        float3 betax_sum = 9.0f * color_sum - alphax_sum;
+        */
+
+#if ICBC_USE_AVX512_PERMUTE
+
+        auto loadmask = lane_id() < vbroadcast(float(count));
+
+        // Load sat in one register:
+        Vec vrsat = vload(loadmask, r_sat, FLT_MAX);
+        Vec vgsat = vload(loadmask, g_sat, FLT_MAX);
+        Vec vbsat = vload(loadmask, b_sat, FLT_MAX);
+        Vec vwsat = vload(loadmask, w_sat, FLT_MAX);
+
+        // Load 4 uint8 per lane.
+        __m512i packedClusterIndex = _mm512_load_si512((__m512i *)&s_fourCluster[i]);
+
+        // Load index and decrement.
+        auto c0 = _mm512_and_epi32(packedClusterIndex, _mm512_set1_epi32(0xFF));
+        auto c0mask = _mm512_cmpgt_epi32_mask(c0, _mm512_setzero_si512());
+        c0 = _mm512_sub_epi32(c0, _mm512_set1_epi32(1));
+
+        // if upper bit set, zero, otherwise load sat entry.
+        x0.x = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vrsat));
+        x0.y = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vgsat));
+        x0.z = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vbsat));
+        w0 = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vwsat));
+
+        auto c1 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 8), _mm512_set1_epi32(0xFF));
+        auto c1mask = _mm512_cmpgt_epi32_mask(c1, _mm512_setzero_si512());
+        c1 = _mm512_sub_epi32(c1, _mm512_set1_epi32(1));
+
+        x1.x = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vrsat));
+        x1.y = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vgsat));
+        x1.z = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vbsat));
+        w1 = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vwsat));
+
+        auto c2 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 16), _mm512_set1_epi32(0xFF));
+        auto c2mask = _mm512_cmpgt_epi32_mask(c2, _mm512_setzero_si512());
+        c2 = _mm512_sub_epi32(c2, _mm512_set1_epi32(1));
+
+        x2.x = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vrsat));
+        x2.y = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vgsat));
+        x2.z = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vbsat));
+        w2 = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vwsat));
+
+#elif ICBC_USE_AVX2_PERMUTE2
+        // Fabian Giesen says not to mix _mm256_blendv_ps and _mm256_permutevar8x32_ps since they contend for the same resources and instead emulate blendv using bit ops.
+
         // Load 4 uint8 per lane.
         __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_fourCluster[i]);
 
         if (count <= 8) {
             // Load r_sat in one register:
-            Wide8 r07 = load8(r_sat);
-            Wide8 g07 = load8(g_sat);
-            Wide8 b07 = load8(b_sat);
-            Wide8 w07 = load8(w_sat);
+            Vec r07 = vload(r_sat);
+            Vec g07 = vload(g_sat);
+            Vec b07 = vload(b_sat);
+            Vec w07 = vload(w_sat);
 
             // Load index and decrement.
-            auto c0 = _mm256_sub_epi32(_mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
+            auto c0mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
+            c0 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
 
-            // if upper bit set, zero, otherwise load sat entry.
-            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            w0.v   = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            // Load sat entry, -1 returns 0.
+            x0.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c0), c0mask);
+            x0.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c0), c0mask);
+            x0.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c0), c0mask);
+            w0 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c0), c0mask);
 
-            auto c1 = _mm256_sub_epi32(_mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
+            auto c1mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c1, _mm256_setzero_si256()));
+            c1 = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
 
-            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            w1.v   = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            x1.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c1), c1mask);
+            x1.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c1), c1mask);
+            x1.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c1), c1mask);
+            w1 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c1), c1mask);
 
-            auto c2 = _mm256_sub_epi32(_mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
+            auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
+            auto c2mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c2, _mm256_setzero_si256()));
+            c2 = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
 
-            x2.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07.v, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
-            x2.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07.v, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
-            x2.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07.v, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
-            w2.v   = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07.v, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
+            x2.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c2), c2mask);
+            x2.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c2), c2mask);
+            x2.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c2), c2mask);
+            w2 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c2), c2mask);
         }
         else {
             // Load r_sat in two registers:
-            Wide8 rLo = load8(r_sat); Wide8 rUp = load8(r_sat + 8);
-            Wide8 gLo = load8(g_sat); Wide8 gUp = load8(g_sat + 8);
-            Wide8 bLo = load8(b_sat); Wide8 bUp = load8(b_sat + 8);
-            Wide8 wLo = load8(w_sat); Wide8 wUp = load8(w_sat + 8);
+            Vec rLo = vload(r_sat); Vec rHi = vload(r_sat + 8);
+            Vec gLo = vload(g_sat); Vec gHi = vload(g_sat + 8);
+            Vec bLo = vload(b_sat); Vec bHi = vload(b_sat + 8);
+            Vec wLo = vload(w_sat); Vec wHi = vload(w_sat + 8);
 
             auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
+            auto c0LoMask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
             auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
 
             // if upper bit set, zero, otherwise load sat entry.
-            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x0.x = _mm256_and_ps(_mm256_permutevar8x32_ps(rLo, c0Lo), c0LoMask);
+            x0.y = _mm256_and_ps(_mm256_permutevar8x32_ps(gLo, c0Lo), c0LoMask);
+            x0.z = _mm256_and_ps(_mm256_permutevar8x32_ps(bLo, c0Lo), c0LoMask);
+            w0 = _mm256_and_ps(_mm256_permutevar8x32_ps(wLo, c0Lo), c0LoMask);
 
-            auto c0Up = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
+            auto c0Hi = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
 
             // if upper bit set, same, otherwise load sat entry.
-            x0.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c0Up), x0.x.v, _mm256_castsi256_ps(c0Up));
-            x0.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c0Up), x0.y.v, _mm256_castsi256_ps(c0Up));
-            x0.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c0Up), x0.z.v, _mm256_castsi256_ps(c0Up));
-            w0.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c0Up), w0.v, _mm256_castsi256_ps(c0Up));
+            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c0Hi), x0.x, _mm256_castsi256_ps(c0Hi));
+            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c0Hi), x0.y, _mm256_castsi256_ps(c0Hi));
+            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c0Hi), x0.z, _mm256_castsi256_ps(c0Hi));
+            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c0Hi), w0, _mm256_castsi256_ps(c0Hi));
 
             auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
+            auto c1LoMask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c1, _mm256_setzero_si256()));
             auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
 
             // if upper bit set, zero, otherwise load sat entry.
-            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x1.x = _mm256_and_ps(_mm256_permutevar8x32_ps(rLo, c1Lo), c1LoMask);
+            x1.y = _mm256_and_ps(_mm256_permutevar8x32_ps(gLo, c1Lo), c1LoMask);
+            x1.z = _mm256_and_ps(_mm256_permutevar8x32_ps(bLo, c1Lo), c1LoMask);
+            w1 = _mm256_and_ps(_mm256_permutevar8x32_ps(wLo, c1Lo), c1LoMask);
 
-            auto c1Up = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
+            auto c1Hi = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
 
             // if upper bit set, same, otherwise load sat entry.
-            x1.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c1Up), x1.x.v, _mm256_castsi256_ps(c1Up));
-            x1.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c1Up), x1.y.v, _mm256_castsi256_ps(c1Up));
-            x1.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c1Up), x1.z.v, _mm256_castsi256_ps(c1Up));
-            w1.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c1Up), w1.v, _mm256_castsi256_ps(c1Up));
+            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c1Hi), x1.x, _mm256_castsi256_ps(c1Hi));
+            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c1Hi), x1.y, _mm256_castsi256_ps(c1Hi));
+            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c1Hi), x1.z, _mm256_castsi256_ps(c1Hi));
+            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
 
             auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
+            auto c2LoMask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c2, _mm256_setzero_si256()));
             auto c2Lo = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
 
             // if upper bit set, zero, otherwise load sat entry.
-            x2.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo.v, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
-            x2.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo.v, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
-            x2.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo.v, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
-            w2.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo.v, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
+            x2.x = _mm256_and_ps(_mm256_permutevar8x32_ps(rLo, c2Lo), c2LoMask);
+            x2.y = _mm256_and_ps(_mm256_permutevar8x32_ps(gLo, c2Lo), c2LoMask);
+            x2.z = _mm256_and_ps(_mm256_permutevar8x32_ps(bLo, c2Lo), c2LoMask);
+            w2 = _mm256_and_ps(_mm256_permutevar8x32_ps(wLo, c2Lo), c2LoMask);
 
-            auto c2Up = _mm256_sub_epi32(c2, _mm256_set1_epi32(9));
+            auto c2Hi = _mm256_sub_epi32(c2, _mm256_set1_epi32(9));
 
             // if upper bit set, same, otherwise load sat entry.
-            x2.x.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rUp.v, c2Up), x2.x.v, _mm256_castsi256_ps(c2Up));
-            x2.y.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gUp.v, c2Up), x2.y.v, _mm256_castsi256_ps(c2Up));
-            x2.z.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bUp.v, c2Up), x2.z.v, _mm256_castsi256_ps(c2Up));
-            w2.v = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wUp.v, c2Up), w2.v, _mm256_castsi256_ps(c2Up));
+            x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c2Hi), x2.x, _mm256_castsi256_ps(c2Hi));
+            x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c2Hi), x2.y, _mm256_castsi256_ps(c2Hi));
+            x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c2Hi), x2.z, _mm256_castsi256_ps(c2Hi));
+            w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c2Hi), w2, _mm256_castsi256_ps(c2Hi));
+    }
+
+#elif ICBC_USE_AVX2_PERMUTE
+        // Load 4 uint8 per lane.
+        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_fourCluster[i]);
+
+        if (count <= 8) {
+            // Load index and decrement.
+            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
+            c0 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+
+            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
+            c1 = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
+
+            auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
+            c2 = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            Vec r07 = vload(r_sat);
+            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
+
+            Vec g07 = vload(g_sat);
+            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
+
+            Vec b07 = vload(b_sat);
+            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
+
+            Vec w07 = vload(w_sat);
+            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
+            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
+            w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
+
+        }
+        else {
+            // Unpack indices.           
+            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
+            auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+            auto c0Hi = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
+
+            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
+            auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
+            auto c1Hi = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
+
+            auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
+            auto c2Lo = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
+            auto c2Hi = _mm256_sub_epi32(c2, _mm256_set1_epi32(9));
+
+            // if upper bit set, zero, otherwise load sat entry.
+            Vec rLo = vload(r_sat);
+            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
+
+            Vec rHi = vload(r_sat + 8);
+            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c0Hi), x0.x, _mm256_castsi256_ps(c0Hi));
+            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c1Hi), x1.x, _mm256_castsi256_ps(c1Hi));
+            x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c2Hi), x2.x, _mm256_castsi256_ps(c2Hi));
+
+            Vec gLo = vload(g_sat);
+            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
+
+            Vec gHi = vload(g_sat + 8);
+            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c0Hi), x0.y, _mm256_castsi256_ps(c0Hi));
+            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c1Hi), x1.y, _mm256_castsi256_ps(c1Hi));
+            x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c2Hi), x2.y, _mm256_castsi256_ps(c2Hi));
+
+            Vec bLo = vload(b_sat);
+            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
+
+            Vec bHi = vload(b_sat + 8);
+            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c0Hi), x0.z, _mm256_castsi256_ps(c0Hi));
+            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c1Hi), x1.z, _mm256_castsi256_ps(c1Hi));
+            x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c2Hi), x2.z, _mm256_castsi256_ps(c2Hi));
+
+            Vec wLo = vload(w_sat);
+            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
+            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
+            w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
+
+            Vec wHi = vload(w_sat + 8);
+            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c0Hi), w0, _mm256_castsi256_ps(c0Hi));
+            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
+            w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c2Hi), w2, _mm256_castsi256_ps(c2Hi));
         }
 
 #elif ICBC_USE_AVX2_GATHER
@@ -2163,123 +2710,151 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         // Load 4 uint8 per lane.
         __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_fourCluster[i]);
 
+#if 0 // Masked gathers.
+        auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
+        auto c0mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
+        c0 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+
+        x0.x = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), r_sat, c0, c0mask, 4);
+        x0.y = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), g_sat, c0, c0mask, 4);
+        x0.z = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), b_sat, c0, c0mask, 4);
+        w0 = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), w_sat, c0, c0mask, 4);
+
+        auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
+        auto c1mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
+        c1 = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
+
+        x1.x = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), r_sat, c1, c1mask, 4);
+        x1.y = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), g_sat, c1, c1mask, 4);
+        x1.z = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), b_sat, c1, c1mask, 4);
+        w1 = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), w_sat, c1, c1mask, 4);
+
+        auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
+        auto c2mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
+        c2 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+
+        x2.x = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), r_sat, c2, c2mask, 4);
+        x2.y = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), g_sat, c2, c2mask, 4);
+        x2.z = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), b_sat, c2, c2mask, 4);
+        w2 = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), w_sat, c2, c2mask, 4);
+#else
         // Load SAT elements.
         float * base = (float *)x_sat;
 
         __m256i c0 = _mm256_slli_epi32(packedClusterIndex, 2);
         c0 = _mm256_and_si256(c0, _mm256_set1_epi32(0x3FC));
 
-        x0.x.v = _mm256_i32gather_ps(base + 0, c0, 4);
-        x0.y.v = _mm256_i32gather_ps(base + 1, c0, 4);
-        x0.z.v = _mm256_i32gather_ps(base + 2, c0, 4);
-        w0.v = _mm256_i32gather_ps(base + 3, c0, 4);
+        x0.x = _mm256_i32gather_ps(base + 0, c0, 4);
+        x0.y = _mm256_i32gather_ps(base + 1, c0, 4);
+        x0.z = _mm256_i32gather_ps(base + 2, c0, 4);
+        w0 = _mm256_i32gather_ps(base + 3, c0, 4);
 
         __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 6), _mm256_set1_epi32(0x3FC));
-        x1.x.v = _mm256_i32gather_ps(base + 0, c1, 4);
-        x1.y.v = _mm256_i32gather_ps(base + 1, c1, 4);
-        x1.z.v = _mm256_i32gather_ps(base + 2, c1, 4);
-        w1.v = _mm256_i32gather_ps(base + 3, c1, 4);
+        x1.x = _mm256_i32gather_ps(base + 0, c1, 4);
+        x1.y = _mm256_i32gather_ps(base + 1, c1, 4);
+        x1.z = _mm256_i32gather_ps(base + 2, c1, 4);
+        w1 = _mm256_i32gather_ps(base + 3, c1, 4);
 
         __m256i c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 14), _mm256_set1_epi32(0x3FC));
-        x2.x.v = _mm256_i32gather_ps(base + 0, c2, 4);
-        x2.y.v = _mm256_i32gather_ps(base + 1, c2, 4);
-        x2.z.v = _mm256_i32gather_ps(base + 2, c2, 4);
-        w2.v = _mm256_i32gather_ps(base + 3, c2, 4);
+        x2.x = _mm256_i32gather_ps(base + 0, c2, 4);
+        x2.y = _mm256_i32gather_ps(base + 1, c2, 4);
+        x2.z = _mm256_i32gather_ps(base + 2, c2, 4);
+        w2 = _mm256_i32gather_ps(base + 3, c2, 4);
+#endif
 
 #else
-        // Plain AVX1 path
-        x0.x = zero8(); x0.y = zero8(); x0.z = zero8(); w0 = zero8();
-        x1.x = zero8(); x1.y = zero8(); x1.z = zero8(); w1 = zero8();
-        x2.x = zero8(); x2.y = zero8(); x2.z = zero8(); w2 = zero8();
+        // Scalar path
+        x0.x = vzero(); x0.y = vzero(); x0.z = vzero(); w0 = vzero();
+        x1.x = vzero(); x1.y = vzero(); x1.z = vzero(); w1 = vzero();
+        x2.x = vzero(); x2.y = vzero(); x2.z = vzero(); w2 = vzero();
 
-        for (int l = 0; l < 8; l++) {
+        for (int l = 0; l < VEC_SIZE; l++) {
             uint c0 = s_fourCluster[i + l].c0;
             if (c0) {
                 c0 -= 1;
-                x0.x.e[l] = r_sat[c0];
-                x0.y.e[l] = g_sat[c0];
-                x0.z.e[l] = b_sat[c0];
-                w0.e[l] = w_sat[c0];
+                lane(x0.x, l) = r_sat[c0];
+                lane(x0.y, l) = g_sat[c0];
+                lane(x0.z, l) = b_sat[c0];
+                lane(w0, l) = w_sat[c0];
             }
 
             uint c1 = s_fourCluster[i + l].c1;
             if (c1) {
                 c1 -= 1;
-                x1.x.e[l] = r_sat[c1];
-                x1.y.e[l] = g_sat[c1];
-                x1.z.e[l] = b_sat[c1];
-                w1.e[l] = w_sat[c1];
+                lane(x1.x, l) = r_sat[c1];
+                lane(x1.y, l) = g_sat[c1];
+                lane(x1.z, l) = b_sat[c1];
+                lane(w1, l) = w_sat[c1];
             }
 
             uint c2 = s_fourCluster[i + l].c2;
             if (c2) {
                 c2 -= 1;
-                x2.x.e[l] = r_sat[c2];
-                x2.y.e[l] = g_sat[c2];
-                x2.z.e[l] = b_sat[c2];
-                w2.e[l] = w_sat[c2];
+                lane(x2.x, l) = r_sat[c2];
+                lane(x2.y, l) = g_sat[c2];
+                lane(x2.z, l) = b_sat[c2];
+                lane(w2, l) = w_sat[c2];
             }
         }
 #endif
 
-        Wide8 w3 = broadcast8(m_wsum) - w2;
+        Vec w3 = vbroadcast(m_wsum) - w2;
         x2 = x2 - x1;
         x1 = x1 - x0;
         w2 = w2 - w1;
         w1 = w1 - w0;
 
-        Wide8 alpha2_sum = mad8(w2, broadcast8(1.0f / 9.0f), mad8(w1, broadcast8(4.0f / 9.0f), w0));
-        Wide8 beta2_sum  = mad8(w1, broadcast8(1.0f / 9.0f), mad8(w2, broadcast8(4.0f / 9.0f), w3));
+        Vec alpha2_sum = vmad(w2, vbroadcast(1.0f / 9.0f), vmad(w1, vbroadcast(4.0f / 9.0f), w0));
+        Vec beta2_sum  = vmad(w1, vbroadcast(1.0f / 9.0f), vmad(w2, vbroadcast(4.0f / 9.0f), w3));
 
-        Wide8 alphabeta_sum = (w1 + w2) * broadcast8(2.0f / 9.0f);
-        Wide8 factor = rcp8(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+        Vec alphabeta_sum = (w1 + w2) * vbroadcast(2.0f / 9.0f);
+        Vec factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
 
-        Vector3_Wide8 alphax_sum = mad8(x2, broadcast8(1.0f / 3.0f), mad8(x1, broadcast8(2.0f / 3.0f), x0));
-        Vector3_Wide8 betax_sum = broadcast8(m_xsum) - alphax_sum;
+        Vector3_Vec alphax_sum = vmad(x2, vbroadcast(1.0f / 3.0f), vmad(x1, vbroadcast(2.0f / 3.0f), x0));
+        Vector3_Vec betax_sum = vbroadcast(m_xsum) - alphax_sum;
 
-        Vector3_Wide8 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
-        Vector3_Wide8 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+        Vector3_Vec a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
+        Vector3_Vec b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
 
         // clamp to the grid
-        a = saturate8(a);
-        b = saturate8(b);
-        a = round_ept8(a);
-        b = round_ept8(b);
+        a = vsaturate(a);
+        b = vsaturate(b);
+        a = vround_ept(a);
+        b = vround_ept(b);
 
         // compute the error
-        Vector3_Wide8 e1 = mad8(a * a, alpha2_sum, mad8(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * broadcast8(2.0f)));
+        Vector3_Vec e1 = vmad(a * a, alpha2_sum, vmad(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * vbroadcast(2.0f)));
 
         // apply the metric to the error term
-        //Wide8 error = dot8(e1, broadcast8(m_metricSqr));
-        Wide8 error = e1.x + e1.y + e1.z;//(e1, broadcast8(m_metricSqr));
+        Vec error = vdot(e1, vbroadcast(m_metricSqr));
 
         // keep the solution if it wins
-        auto mask = (error < besterror8);
+        auto mask = (error < vbesterror);
         
         // We could mask the unused lanes here, but instead set the invalid SAT entries to FLT_MAX.
-        //mask = (mask & (broadcast8(total_order_count) >= tid8(i))); // This doesn't seem to help. Is it OK to consider elements out of bounds?
+        //mask = (mask & (vbroadcast(total_order_count) >= tid8(i))); // This doesn't seem to help. Is it OK to consider elements out of bounds?
 
-        besterror8 = select8(mask, besterror8, error);
-        beststart8 = select8(mask, beststart8, a);
-        bestend8 = select8(mask, bestend8, b);
+        vbesterror = vselect(mask, vbesterror, error);
+        vbeststart = vselect(mask, vbeststart, a);
+        vbestend = vselect(mask, vbestend, b);
     }
 
     // Is there a better way to do this reduction?
     int bestindex;
-    for (int i = 0; i < 8; i++) {
-        if (besterror8.e[i] < besterror) {
-            besterror = besterror8.e[i];
+    for (int i = 0; i < VEC_SIZE; i++) {
+        if (lane(vbesterror, i) < besterror) {
+            besterror = lane(vbesterror, i);
             bestindex = i;
         }
     }
-    beststart.x = beststart8.x.e[bestindex]; 
-    beststart.y = beststart8.y.e[bestindex]; 
-    beststart.z = beststart8.z.e[bestindex];
-    bestend.x = bestend8.x.e[bestindex];
-    bestend.y = bestend8.y.e[bestindex];
-    bestend.z = bestend8.z.e[bestindex];
+    beststart.x = lane(vbeststart.x, bestindex);
+    beststart.y = lane(vbeststart.y, bestindex);
+    beststart.z = lane(vbeststart.z, bestindex);
+    bestend.x = lane(vbestend.x, bestindex);
+    bestend.y = lane(vbestend.y, bestindex);
+    bestend.z = lane(vbestend.z, bestindex);
 
-#elif !ICBC_USE_SAT
+#elif !ICBC_USE_SAT // ICBC_USE_VEC
 
     Vector3 x0 = { 0.0f };
     float w0 = 0.0f;
@@ -2354,7 +2929,7 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
 
 #else
     // This could be done in set colors.
-    Vector3 x_sat[17];
+    /*ICBC_ALIGN_16 Vector3 x_sat[17];
     float w_sat[17];
 
     Vector3 x_sum = { 0 };
@@ -2366,13 +2941,36 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         w_sum += m_weights[i];
     }
     x_sat[count] = x_sum;
-    w_sat[count] = w_sum;
+    w_sat[count] = w_sum;*/
 
+    ICBC_ALIGN_16 float r_sat[16];
+    ICBC_ALIGN_16 float g_sat[16];
+    ICBC_ALIGN_16 float b_sat[16];
+    ICBC_ALIGN_16 float w_sat[16];
+
+    r_sat[0] = m_colors[0].x;
+    g_sat[0] = m_colors[0].y;
+    b_sat[0] = m_colors[0].z;
+    w_sat[0] = m_weights[0];
+
+    for (uint i = 1; i < count; i++) {
+        r_sat[i] = r_sat[i - 1] + m_colors[i].x;
+        g_sat[i] = g_sat[i - 1] + m_colors[i].y;
+        b_sat[i] = b_sat[i - 1] + m_colors[i].z;
+        w_sat[i] = w_sat[i - 1] + m_weights[i];
+    }
+    for (uint i = count; i < 16; i++) {
+        r_sat[i] = FLT_MAX;
+        g_sat[i] = FLT_MAX;
+        b_sat[i] = FLT_MAX;
+        w_sat[i] = FLT_MAX;
+    }
 
     // check all possible clusters for this total order
-    for (int i = 0; i < s_fourClusterTotal[count-1]; i+=ICBC_SAT_INC)
+    const int total_cluster_count = s_fourClusterTotal[count - 1];
+    for (int i = 0; i < total_cluster_count; i+=1)
     {
-        uint c0 = s_fourCluster[i].c0;
+        /*uint c0 = s_fourCluster[i].c0;
         uint c1 = s_fourCluster[i].c1;
         uint c2 = s_fourCluster[i].c2;
         ICBC_ASSERT(c0 + c1 + c2 <= count);
@@ -2384,7 +2982,42 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         float w1 = w_sat[c1];
 
         Vector3 x2 = x_sat[c2];
-        float w2 = w_sat[c2];
+        float w2 = w_sat[c2];*/
+
+        Vector3 x0; float w0;
+        Vector3 x1; float w1;
+        Vector3 x2; float w2;
+
+        x0.x = 0; x0.y = 0; x0.z = 0; w0 = 0;
+        x1.x = 0; x1.y = 0; x1.z = 0; w1 = 0;
+        x2.x = 0; x2.y = 0; x2.z = 0; w2 = 0;
+
+        int c0 = int(s_fourCluster[i].c0);
+        if (c0) {
+            c0 -= 1;
+            x0.x = r_sat[c0];
+            x0.y = g_sat[c0];
+            x0.z = b_sat[c0];
+            w0   = w_sat[c0];
+        }
+
+        int c1 = int(s_fourCluster[i].c1);
+        if (c1) {
+            c1 -= 1;
+            x1.x = r_sat[c1];
+            x1.y = g_sat[c1];
+            x1.z = b_sat[c1];
+            w1   = w_sat[c1];
+        }
+
+        int c2 = int(s_fourCluster[i].c2);
+        if (c2) {
+            c2 -= 1;
+            x2.x = r_sat[c2];
+            x2.y = g_sat[c2];
+            x2.z = b_sat[c2];
+            w2   = w_sat[c2];
+        }
 
         float w3 = m_wsum - w2;
         x2 = x2 - x1;
@@ -2392,12 +3025,12 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         w2 = w2 - w1;
         w1 = w1 - w0;
 
-        float const alpha2_sum = w0 + w1 * (4.0f / 9.0f) + w2 * (1.0f / 9.0f);
-        float const beta2_sum = w3 + w2 * (4.0f / 9.0f) + w1 * (1.0f / 9.0f);
+        float const alpha2_sum = w2 * (1.0f / 9.0f) + w1 * (4.0f / 9.0f) + w0;
+        float const beta2_sum = w1 * (1.0f / 9.0f) + w2 * (4.0f / 9.0f) + w3;
         float const alphabeta_sum = (w1 + w2) * (2.0f / 9.0f);
         float const factor = 1.0f / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
 
-        Vector3 const alphax_sum = x0 + x1 * (2.0f / 3.0f) + x2 * (1.0f / 3.0f);
+        Vector3 const alphax_sum = x2 * (1.0f / 3.0f) + x1 * (2.0f / 3.0f) + x0;
         Vector3 const betax_sum = m_xsum - alphax_sum;
 
         Vector3 a = (alphax_sum*beta2_sum - betax_sum * alphabeta_sum)*factor;
@@ -2416,16 +3049,13 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         float error = dot(e1, m_metricSqr);
 
         // keep the solution if it wins
-        if (error < besterror) // In case of ties we could evaluate the exact error.
-        {
-            besterror = error;
-            beststart = a;
-            bestend = b;
-        }
+        bool mask = error < besterror;
+        besterror = mask ? error : besterror;
+        beststart = mask ? a : beststart;
+        bestend = mask ? b : bestend;
     }
 
-
-#endif
+#endif // ICBC_USE_VEC
 
     *start = beststart;
     *end = bestend;
@@ -3559,7 +4189,7 @@ static float compress_dxt1(const Vector4 input_colors[16], const float input_wei
     }
 
     // Quick end point selection.
-    Vector3 c0, c1;
+    /*Vector3 c0, c1;
     fit_colors_bbox(colors, count, &c0, &c1);
     inset_bbox(&c0, &c1);
     select_diagonal(colors, count, &c0, &c1);
@@ -3577,8 +4207,8 @@ static float compress_dxt1(const Vector4 input_colors[16], const float input_wei
             error = optimized_error;
             *output = optimized_block;
         }
-    }
-    //float error = FLT_MAX;
+    }*/
+    float error = FLT_MAX;
 
     // @@ Use current endpoints as input for initial PCA approximation?
 
