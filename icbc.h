@@ -59,7 +59,7 @@ namespace icbc {
 
 
 #ifndef ICBC_DECODER
-#define ICBC_DECODER 0       // 0 = d3d10, 1 = d3d9, 2 = nvidia, 3 = amd
+#define ICBC_DECODER 0       // 0 = d3d10, 1 = nvidia, 2 = amd
 #endif
 
 
@@ -871,14 +871,11 @@ public:
     void setErrorMetric(const Vector3 & metric);
 
     void setColorSet(const Vector3 * colors, const float * weights, int count, const Vector3 & metric);
-    void setColorSet(const Vector4 * colors, const Vector3 & metric);
-
-    float bestError() const;
-
     void compress3(Vector3 * start, Vector3 * end);
     void compress4(Vector3 * start, Vector3 * end);
 
 #if ICBC_FAST_CLUSTER_FIT
+    void setColorSet(const Vector4 * colors, const Vector3 & metric);    
     void fastCompress3(Vector3 * start, Vector3 * end);
     void fastCompress4(Vector3 * start, Vector3 * end);
 #endif
@@ -1070,55 +1067,6 @@ void ClusterFit::setColorSet(const Vector3 * colors, const float * weights, int 
         }
     }*/
 }
-
-void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
-{
-    setErrorMetric(metric);
-
-    m_count = 16;
-
-    static const float weights[16] = {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1};
-    Vector3 vc[16];
-    for (int i = 0; i < 16; i++) vc[i] = colors[i].xyz;
-
-    // I've tried using a lower quality approximation of the principal direction, but the best fit line seems to produce best results.
-    Vector3 principal = computePrincipalComponent_PowerMethod(16, vc, weights);
-
-    // build the list of values
-    int order[16];
-    float dps[16];
-    for (uint i = 0; i < 16; ++i)
-    {
-        order[i] = i;
-        dps[i] = dot(colors[i].xyz, principal);
-
-        if (colors[i].x < midpoints5[0] && colors[i].y < midpoints6[0] && colors[i].z < midpoints5[0]) anyBlack = true;
-    }
-
-    // stable sort
-    for (uint i = 0; i < 16; ++i)
-    {
-        for (uint j = i; j > 0 && dps[j] < dps[j - 1]; --j)
-        {
-            swap(dps[j], dps[j - 1]);
-            swap(order[j], order[j - 1]);
-        }
-    }
-
-    // weight all the points
-    m_xsum = { 0.0f };
-    m_wsum = 0.0f;
-
-    for (uint i = 0; i < 16; ++i)
-    {
-        int p = order[i];
-        m_colors[i] = colors[p].xyz;
-        m_xsum += m_colors[i];
-        m_weights[i] = 1.0f;
-        m_wsum += m_weights[i];
-    }
-}
-
 
 #if ICBC_FAST_CLUSTER_FIT
 
@@ -2395,6 +2343,54 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
 
 #if ICBC_FAST_CLUSTER_FIT
 
+void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
+{
+    setErrorMetric(metric);
+
+    m_count = 16;
+
+    static const float weights[16] = {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1};
+    Vector3 vc[16];
+    for (int i = 0; i < 16; i++) vc[i] = colors[i].xyz;
+
+    // I've tried using a lower quality approximation of the principal direction, but the best fit line seems to produce best results.
+    Vector3 principal = computePrincipalComponent_PowerMethod(16, vc, weights);
+
+    // build the list of values
+    int order[16];
+    float dps[16];
+    for (uint i = 0; i < 16; ++i)
+    {
+        order[i] = i;
+        dps[i] = dot(colors[i].xyz, principal);
+
+        if (colors[i].x < midpoints5[0] && colors[i].y < midpoints6[0] && colors[i].z < midpoints5[0]) anyBlack = true;
+    }
+
+    // stable sort
+    for (uint i = 0; i < 16; ++i)
+    {
+        for (uint j = i; j > 0 && dps[j] < dps[j - 1]; --j)
+        {
+            swap(dps[j], dps[j - 1]);
+            swap(order[j], order[j - 1]);
+        }
+    }
+
+    // weight all the points
+    m_xsum = { 0.0f };
+    m_wsum = 0.0f;
+
+    for (uint i = 0; i < 16; ++i)
+    {
+        int p = order[i];
+        m_colors[i] = colors[p].xyz;
+        m_xsum += m_colors[i];
+        m_weights[i] = 1.0f;
+        m_wsum += m_weights[i];
+    }
+}
+
 void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
 {
     ICBC_ASSERT(m_count == 16);
@@ -3260,109 +3256,6 @@ static float compress_dxt1_single_color(const Vector3 * colors, const float * we
 }
 
 
-static float compress_dxt1_bounding_box_exhaustive(const Vector4 input_colors[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, int max_volume, BlockDXT1 * output)
-{
-    // Compute bounding box.
-    Vector3 min_color = { 1,1,1 };
-    Vector3 max_color = { 0,0,0 };
-
-    for (int i = 0; i < count; i++) {
-        min_color = min(min_color, colors[i]);
-        max_color = max(max_color, colors[i]);
-    }
-
-    // Convert to 5:6:5
-    int min_r = int(31 * min_color.x);
-    int min_g = int(63 * min_color.y);
-    int min_b = int(31 * min_color.z);
-    int max_r = int(31 * max_color.x + 1);
-    int max_g = int(63 * max_color.y + 1);
-    int max_b = int(31 * max_color.z + 1);
-
-    // Expand the box.
-    int range_r = max_r - min_r;
-    int range_g = max_g - min_g;
-    int range_b = max_b - min_b;
-
-    min_r = max(0, min_r - range_r / 2 - 2);
-    min_g = max(0, min_g - range_g / 2 - 2);
-    min_b = max(0, min_b - range_b / 2 - 2);
-
-    max_r = min(31, max_r + range_r / 2 + 2);
-    max_g = min(63, max_g + range_g / 2 + 2);
-    max_b = min(31, max_b + range_b / 2 + 2);
-
-    // Estimate size of search space.
-    int volume = (max_r-min_r+1) * (max_g-min_g+1) * (max_b-min_b+1);
-
-    // if size under search_limit, then proceed. Note that search_volume is sqrt of number of evaluations.
-    if (volume > max_volume) {
-        return FLT_MAX;
-    }
-
-    // @@ Convert to fixed point before building box?
-    Color32 colors32[16];
-    for (int i = 0; i < count; i++) {
-        colors32[i] = vector3_to_color32(colors[i]);
-    }
-
-    float best_error = FLT_MAX;
-    Color16 best0, best1;           // @@ Record endpoints as Color16?
-
-    Color16 c0, c1;
-    Color32 palette[4];
-
-    for(int r0 = min_r; r0 <= max_r; r0++)
-    for(int g0 = min_g; g0 <= max_g; g0++)
-    for(int b0 = min_b; b0 <= max_b; b0++)
-    {
-        c0.r = r0; c0.g = g0; c0.b = b0;
-        palette[0] = bitexpand_color16_to_color32(c0);
-
-        for(int r1 = min_r; r1 <= max_r; r1++)
-        for(int g1 = min_g; g1 <= max_g; g1++)
-        for(int b1 = min_b; b1 <= max_b; b1++)
-        {
-            c1.r = r1; c1.g = g1; c1.b = b1;
-            palette[1] = bitexpand_color16_to_color32(c1);
-
-            if (c0.u > c1.u) {
-                // Evaluate error in 4 color mode.
-                evaluate_palette4(c0, c1, palette);
-            }
-            else {
-                if (three_color_mode) {
-                    // Evaluate error in 3 color mode.
-                    evaluate_palette3(c0, c1, palette);
-                }
-                else {
-                    // Skip 3 color mode.
-                    continue;
-                }
-            }
-
-            float error = evaluate_palette_error(palette, colors32, weights, count);
-
-            if (error < best_error) {
-                best_error = error;
-                best0 = c0;
-                best1 = c1;
-            }
-        }
-    }
-
-    output->col0 = best0;
-    output->col1 = best1;
-
-    Vector3 vector_palette[4];
-    evaluate_palette(output->col0, output->col1, vector_palette);
-
-    output->indices = compute_indices(input_colors, color_weights, vector_palette);
-
-    return best_error / (255 * 255);
-}
-
-
 static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, BlockDXT1 * output)
 {
     ClusterFit fit;
@@ -3520,7 +3413,7 @@ static float compress_dxt1(const Vector4 input_colors[16], const float input_wei
     }
 
     // Quick end point selection.
-    /*Vector3 c0, c1;
+    Vector3 c0, c1;
     fit_colors_bbox(colors, count, &c0, &c1);
     inset_bbox(&c0, &c1);
     select_diagonal(colors, count, &c0, &c1);
@@ -3538,8 +3431,8 @@ static float compress_dxt1(const Vector4 input_colors[16], const float input_wei
             error = optimized_error;
             *output = optimized_block;
         }
-    }*/
-    float error = FLT_MAX;
+    }
+    //float error = FLT_MAX;
 
     // @@ Use current endpoints as input for initial PCA approximation?
 
