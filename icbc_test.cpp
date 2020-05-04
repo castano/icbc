@@ -1,5 +1,8 @@
 
-#define ICBC_USE_VEC 4
+#define ICBC_USE_SPMD 2         // SSE2
+//#define ICBC_USE_SPMD 3         // SSE4.1
+//#define ICBC_USE_SPMD 5         // AVX2
+//#define ICBC_USE_SPMD 6         // AVX512
 #define ICBC_IMPLEMENTATION
 #include "icbc.h"
 
@@ -51,7 +54,8 @@ class ExitScopeHelp {
 // Timer
 
 // Based of https://gist.github.com/pervognsen/496d659251ad2af200dde4c773bd565f
-#if _WIN32
+#if defined _WIN32 || __CYGWIN__
+#include <windows.h>
 struct Timer {
     LARGE_INTEGER win32_freq;
     LARGE_INTEGER win32_start;
@@ -137,7 +141,7 @@ float evaluate_dxt1_mse(u8 * rgba, u8 * block, int block_count, icbc::Decoder de
     return float(total / (16 * block_count));
 }
 
-#define MAKEFOURCC(str) (u32(str[0]) | (u32(str[1]) << 8) | (u32(str[2]) << 16) | (u32(str[3]) << 24 ))
+#define IC_MAKEFOURCC(str) (u32(str[0]) | (u32(str[1]) << 8) | (u32(str[2]) << 16) | (u32(str[3]) << 24 ))
 
 bool output_dxt_dds (u32 w, u32 h, const u8* data, const char * filename) {
 
@@ -150,7 +154,7 @@ bool output_dxt_dds (u32 w, u32 h, const u8* data, const char * filename) {
     const u32 DDSCAPS_TEXTURE = 0x00001000;
 
     struct DDS {
-        u32 fourcc = MAKEFOURCC("DDS ");
+        u32 fourcc = IC_MAKEFOURCC("DDS ");
         u32 size = 124;
         u32 flags = DDSD_CAPS|DDSD_PIXELFORMAT|DDSD_WIDTH|DDSD_HEIGHT|DDSD_LINEARSIZE;
         u32 height;
@@ -162,7 +166,7 @@ bool output_dxt_dds (u32 w, u32 h, const u8* data, const char * filename) {
         struct {
             u32 size = 32;
             u32 flags = DDPF_FOURCC;
-            u32 fourcc = MAKEFOURCC("DXT1");
+            u32 fourcc = IC_MAKEFOURCC("DXT1");
             u32 bitcount;
             u32 rmask;
             u32 gmask;

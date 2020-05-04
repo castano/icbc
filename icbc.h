@@ -1,4 +1,4 @@
-// icbc.h v1.1
+// icbc.h v1.02
 // A High Quality BC1 Encoder by Ignacio Castano <castano@gmail.com>.
 // 
 // LICENSE:
@@ -29,36 +29,31 @@ namespace icbc {
 
 #ifdef ICBC_IMPLEMENTATION
 
+// Instruction level support must be chosen at compile time setting ICBC_USE_SPMD to one of these values:
 #define ICBC_FLOAT  1
-#define ICBC_SSE    2
-#define ICBC_SSE2   3
-#define ICBC_SSE41  4
-#define ICBC_AVX1   5
-#define ICBC_AVX2   6
-#define ICBC_AVX512 7
+#define ICBC_SSE2   2
+#define ICBC_SSE41  3
+#define ICBC_AVX1   4
+#define ICBC_AVX2   5
+#define ICBC_AVX512 6
 
 // AVX does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
 //#define ICBC_USE_FMA 1
 
-// According to Rich rcp is not deterministic (different precision on Intel and AMD), enable if you don't care about that.
+// Apparently rcp is not deterministic (different precision on Intel and AMD), enable if you don't care about that for small performance boost.
 //#define ICBC_USE_RCP 1
 
-
-// Two vector code paths:
-#ifndef ICBC_USE_SIMD
-#define ICBC_USE_SIMD 0         // Original SIMD version. (ICBC_SSE, ICBC_SSE2)
-#endif
-#ifndef ICBC_USE_VEC
-#define ICBC_USE_VEC 1          // SPMD version. (ICBC_SSE2, ICBC_AVX1, ICBC_AVX2, ICBC_AVX512)
+#ifndef ICBC_USE_SPMD
+#define ICBC_USE_SPMD 6          // SIMD version. (ICBC_FLOAT=1, ICBC_SSE2=2, ICBC_SSE41=3, ICBC_AVX1=4, ICBC_AVX2=5, ICBC_AVX512=6)
 #endif
 
-#if ICBC_USE_VEC == ICBC_AVX2
-#define ICBC_USE_AVX2_PERMUTE2 0
-#define ICBC_USE_AVX2_PERMUTE 0
-#define ICBC_USE_AVX2_GATHER 0
+#if ICBC_USE_SPMD == ICBC_AVX2
+#define ICBC_USE_AVX2_PERMUTE2 1    // Using permutevar8x32 and bitops.
+#define ICBC_USE_AVX2_PERMUTE 0     // Using blendv and permutevar8x32.
+#define ICBC_USE_AVX2_GATHER 0      // Using gathers for SAT lookup.
 #endif
 
-#if ICBC_USE_VEC == ICBC_AVX512
+#if ICBC_USE_SPMD == ICBC_AVX512
 #define ICBC_USE_AVX512_PERMUTE 1
 #endif
 
@@ -68,21 +63,19 @@ namespace icbc {
 #endif
 
 
-#if ICBC_USE_SIMD || ICBC_USE_VEC >= ICBC_SSE
-#include <xmmintrin.h>
+#if ICBC_USE_SPMD >= ICBC_SSE2
 #include <emmintrin.h>
 #endif 
 
-#if ICBC_USE_VEC >= ICBC_SSE
-#include <immintrin.h>
-#include <nmmintrin.h> // for SSE4.2
+#if ICBC_USE_SPMD >= ICBC_SSE41
+#include <smmintrin.h>
 #endif
 
-#if ICBC_USE_VEC >= ICBC_AVX
+#if ICBC_USE_SPMD >= ICBC_AVX1
 #include <immintrin.h>
 #endif
 
-#if ICBC_USE_VEC >= ICBC_AVX512
+#if ICBC_USE_SPMD >= ICBC_AVX512
 #include <zmmintrin.h>
 #endif
 
@@ -274,7 +267,7 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-// SIMD
+// SPMD
 
 #ifndef ICBC_ALIGN_16
 #if __GNUC__
@@ -290,205 +283,39 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 #define ICBC_FORCEINLINE __forceinline
 #endif
 
-#if ICBC_USE_SIMD
-
-#define SIMD_INLINE inline
-#define SIMD_NATIVE __forceinline
-
-class SimdVector
-{
-public:
-    __m128 vec;
-
-    typedef SimdVector const& Arg;
-
-    SIMD_NATIVE SimdVector() {}
-
-    SIMD_NATIVE explicit SimdVector(__m128 v) : vec(v) {}
-
-    SIMD_NATIVE explicit SimdVector(float f) {
-        vec = _mm_set1_ps(f);
-    }
-
-    SIMD_NATIVE explicit SimdVector(const float * v)
-    {
-        vec = _mm_load_ps(v);
-    }
-
-    SIMD_NATIVE SimdVector(float x, float y, float z, float w)
-    {
-        vec = _mm_setr_ps(x, y, z, w);
-    }
-
-    SIMD_NATIVE SimdVector(const SimdVector & arg) : vec(arg.vec) {}
-
-    SIMD_NATIVE SimdVector & operator=(const SimdVector & arg)
-    {
-        vec = arg.vec;
-        return *this;
-    }
-
-    SIMD_INLINE float toFloat() const
-    {
-        ICBC_ALIGN_16 float f;
-        _mm_store_ss(&f, vec);
-        return f;
-    }
-
-    SIMD_INLINE Vector3 toVector3() const
-    {
-        ICBC_ALIGN_16 float c[4];
-        _mm_store_ps(c, vec);
-        return { c[0], c[1], c[2] };
-    }
-
-#define SSE_SPLAT( a ) ((a) | ((a) << 2) | ((a) << 4) | ((a) << 6))
-    SIMD_NATIVE SimdVector splatX() const { return SimdVector(_mm_shuffle_ps(vec, vec, SSE_SPLAT(0))); }
-    SIMD_NATIVE SimdVector splatY() const { return SimdVector(_mm_shuffle_ps(vec, vec, SSE_SPLAT(1))); }
-    SIMD_NATIVE SimdVector splatZ() const { return SimdVector(_mm_shuffle_ps(vec, vec, SSE_SPLAT(2))); }
-    SIMD_NATIVE SimdVector splatW() const { return SimdVector(_mm_shuffle_ps(vec, vec, SSE_SPLAT(3))); }
-#undef SSE_SPLAT
-
-    SIMD_NATIVE SimdVector& operator+=(Arg v)
-    {
-        vec = _mm_add_ps(vec, v.vec);
-        return *this;
-    }
-
-    SIMD_NATIVE SimdVector& operator-=(Arg v)
-    {
-        vec = _mm_sub_ps(vec, v.vec);
-        return *this;
-    }
-
-    SIMD_NATIVE SimdVector& operator*=(Arg v)
-    {
-        vec = _mm_mul_ps(vec, v.vec);
-        return *this;
-    }
-};
-
-
-SIMD_NATIVE SimdVector operator+(SimdVector::Arg left, SimdVector::Arg right)
-{
-    return SimdVector(_mm_add_ps(left.vec, right.vec));
-}
-
-SIMD_NATIVE SimdVector operator-(SimdVector::Arg left, SimdVector::Arg right)
-{
-    return SimdVector(_mm_sub_ps(left.vec, right.vec));
-}
-
-SIMD_NATIVE SimdVector operator*(SimdVector::Arg left, SimdVector::Arg right)
-{
-    return SimdVector(_mm_mul_ps(left.vec, right.vec));
-}
-
-// Returns a*b + c
-SIMD_INLINE SimdVector multiplyAdd(SimdVector::Arg a, SimdVector::Arg b, SimdVector::Arg c)
-{
-    return SimdVector(_mm_add_ps(_mm_mul_ps(a.vec, b.vec), c.vec));
-}
-
-// Returns -( a*b - c )
-SIMD_INLINE SimdVector negativeMultiplySubtract(SimdVector::Arg a, SimdVector::Arg b, SimdVector::Arg c)
-{
-    return SimdVector(_mm_sub_ps(c.vec, _mm_mul_ps(a.vec, b.vec)));
-}
-
-SIMD_INLINE SimdVector reciprocal(SimdVector::Arg v)
-{
-    // get the reciprocal estimate
-    __m128 estimate = _mm_rcp_ps(v.vec);
-
-    // one round of Newton-Rhaphson refinement
-    __m128 diff = _mm_sub_ps(_mm_set1_ps(1.0f), _mm_mul_ps(estimate, v.vec));
-    return SimdVector(_mm_add_ps(_mm_mul_ps(diff, estimate), estimate));
-}
-
-SIMD_NATIVE SimdVector min(SimdVector::Arg left, SimdVector::Arg right)
-{
-    return SimdVector(_mm_min_ps(left.vec, right.vec));
-}
-
-SIMD_NATIVE SimdVector max(SimdVector::Arg left, SimdVector::Arg right)
-{
-    return SimdVector(_mm_max_ps(left.vec, right.vec));
-}
-
-SIMD_INLINE SimdVector truncate(SimdVector::Arg v)
-{
-#if (ICBC_USE_SSE == 1)
-    // convert to ints
-    __m128 input = v.vec;
-    __m64 lo = _mm_cvttps_pi32(input);
-    __m64 hi = _mm_cvttps_pi32(_mm_movehl_ps(input, input));
-
-    // convert to floats
-    __m128 part = _mm_movelh_ps(input, _mm_cvtpi32_ps(input, hi));
-    __m128 truncated = _mm_cvtpi32_ps(part, lo);
-
-    // clear out the MMX multimedia state to allow FP calls later
-    _mm_empty();
-    return SimdVector(truncated);
-#else
-    // use SSE2 instructions
-    return SimdVector(_mm_cvtepi32_ps(_mm_cvttps_epi32(v.vec)));
-#endif
-}
-
-SIMD_INLINE SimdVector select(SimdVector::Arg off, SimdVector::Arg on, SimdVector::Arg bits)
-{
-    __m128 a = _mm_andnot_ps(bits.vec, off.vec);
-    __m128 b = _mm_and_ps(bits.vec, on.vec);
-
-    return SimdVector(_mm_or_ps(a, b));
-}
-
-SIMD_INLINE bool compareAnyLessThan(SimdVector::Arg left, SimdVector::Arg right)
-{
-    __m128 bits = _mm_cmplt_ps(left.vec, right.vec);
-    int value = _mm_movemask_ps(bits);
-    return value != 0;
-}
-
-#endif // ICBC_USE_SIMD
-
-
-#if ICBC_USE_VEC == ICBC_FLOAT  // Purely scalar version.
+#if ICBC_USE_SPMD == ICBC_FLOAT  // Purely scalar version.
 
 #define VEC_SIZE 1
 
-using Vec = float;
+using VFloat = float;
 using VMask = bool;
 
-ICBC_FORCEINLINE float & lane(Vec & v, int i) { return v; }
-ICBC_FORCEINLINE Vec vzero() { return 0.0f; }
-ICBC_FORCEINLINE Vec vbroadcast(float x) { return x; }
-ICBC_FORCEINLINE Vec vload(float * ptr) { return *ptr; }
-ICBC_FORCEINLINE Vec vrcp(Vec a) { return 1.0f / a; }
-ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) { return a * b + c; }
-ICBC_FORCEINLINE Vec vsaturate(Vec a) { return min(max(a, 0.0f), 1.0f); }
-ICBC_FORCEINLINE Vec vround(Vec a) { return float(int(a + 0.5f)); }
-ICBC_FORCEINLINE Vec lane_id() { return 0; }
-ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) { return mask ? b : a; }
+ICBC_FORCEINLINE float & lane(VFloat & v, int i) { return v; }
+ICBC_FORCEINLINE VFloat vzero() { return 0.0f; }
+ICBC_FORCEINLINE VFloat vbroadcast(float x) { return x; }
+ICBC_FORCEINLINE VFloat vload(float * ptr) { return *ptr; }
+ICBC_FORCEINLINE VFloat vrcp(VFloat a) { return 1.0f / a; }
+ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) { return a * b + c; }
+ICBC_FORCEINLINE VFloat vsaturate(VFloat a) { return min(max(a, 0.0f), 1.0f); }
+ICBC_FORCEINLINE VFloat vround(VFloat a) { return float(int(a + 0.5f)); }
+ICBC_FORCEINLINE VFloat lane_id() { return 0; }
+ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) { return mask ? b : a; }
 ICBC_FORCEINLINE bool all(VMask m) { return m; }
 ICBC_FORCEINLINE bool any(VMask m) { return m; }
 
 
-#elif ICBC_USE_VEC == ICBC_SSE2 || ICBC_USE_VEC == ICBC_SSE41
+#elif ICBC_USE_SPMD == ICBC_SSE2 || ICBC_USE_SPMD == ICBC_SSE41
 
 #define VEC_SIZE 4
 
 #if __GNUC__
-union Vec {
+union VFloat {
     __m128 v;
     float m128_f32[VEC_SIZE];
 
-    Vec() {}
-    Vec(__m128 v) : v(v) {}
+    VFloat() {}
+    VFloat(__m128 v) : v(v) {}
     operator __m128 & () { return v; }
-    //operator __m128 () const { return v; }
 };
 union VMask {
     __m128 m;
@@ -496,45 +323,43 @@ union VMask {
     VMask() {}
     VMask(__m128 m) : m(m) {}
     operator __m128 & () { return m; }
-    //operator __m128 () const { return v; }
 };
-
 #else
-using Vec = __m128;
+using VFloat = __m128;
 using VMask = __m128;
 #endif
 
-ICBC_FORCEINLINE float & lane(Vec & v, int i) {
+ICBC_FORCEINLINE float & lane(VFloat & v, int i) {
     return v.m128_f32[i];
 }
 
-ICBC_FORCEINLINE Vec vzero() {
+ICBC_FORCEINLINE VFloat vzero() {
     return _mm_setzero_ps();
 }
 
-ICBC_FORCEINLINE Vec vbroadcast(float x) {
+ICBC_FORCEINLINE VFloat vbroadcast(float x) {
     return _mm_set1_ps(x);
 }
 
-ICBC_FORCEINLINE Vec vload(float * ptr) {
+ICBC_FORCEINLINE VFloat vload(float * ptr) {
     return _mm_load_ps(ptr);
 }
 
-ICBC_FORCEINLINE Vec operator+(Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat operator+(VFloat a, VFloat b) {
     return _mm_add_ps(a, b);
 }
 
-ICBC_FORCEINLINE Vec operator-(Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat operator-(VFloat a, VFloat b) {
     return _mm_sub_ps(a, b);
 }
 
-ICBC_FORCEINLINE Vec operator*(Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
     return _mm_mul_ps(a, b);
 }
 
-ICBC_FORCEINLINE Vec vrcp(Vec a) {
+ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 #if ICBC_USE_RCP
-    Vec res = _mm_rcp_ps(a);
+    VFloat res = _mm_rcp_ps(a);
     auto muls = _mm_mul_ps(a, _mm_mul_ps(res, res));
     return _mm_sub_ps(_mm_add_ps(res, res), muls);
 #else
@@ -543,40 +368,40 @@ ICBC_FORCEINLINE Vec vrcp(Vec a) {
 }
 
 // a*b+c
-ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
+ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) {
     return a * b + c;
 }
 
-ICBC_FORCEINLINE Vec vsaturate(Vec a) {
+ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
     auto zero = _mm_setzero_ps();
     auto one = _mm_set1_ps(1.0f);
     return _mm_min_ps(_mm_max_ps(a, zero), one);
 }
 
-ICBC_FORCEINLINE Vec vround(Vec a) {
-#if ICBC_USE_VEC == ICBC_SSE41
+ICBC_FORCEINLINE VFloat vround(VFloat a) {
+#if ICBC_USE_SPMD == ICBC_SSE41
     return _mm_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 #else
     return _mm_cvtepi32_ps(_mm_cvttps_epi32(a + vbroadcast(0.5f)));
 #endif
 }
 
-ICBC_FORCEINLINE Vec lane_id() {
+ICBC_FORCEINLINE VFloat lane_id() {
     return _mm_set_ps(3, 2, 1, 0);
 }
 
-ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return _mm_cmpgt_ps(A, B); }
-ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return _mm_cmpge_ps(A, B); }
-ICBC_FORCEINLINE VMask operator< (Vec A, Vec B) { return _mm_cmplt_ps(A, B); }
-ICBC_FORCEINLINE VMask operator<=(Vec A, Vec B) { return _mm_cmple_ps(A, B); }
+ICBC_FORCEINLINE VMask operator> (VFloat A, VFloat B) { return _mm_cmpgt_ps(A, B); }
+ICBC_FORCEINLINE VMask operator>=(VFloat A, VFloat B) { return _mm_cmpge_ps(A, B); }
+ICBC_FORCEINLINE VMask operator< (VFloat A, VFloat B) { return _mm_cmplt_ps(A, B); }
+ICBC_FORCEINLINE VMask operator<=(VFloat A, VFloat B) { return _mm_cmple_ps(A, B); }
 
 ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return _mm_or_ps(A, B); }
 ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return _mm_and_ps(A, B); }
 ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return _mm_xor_ps(A, B); }
 
 // mask ? b : a
-ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
-#if ICBC_USE_VEC == ICBC_SSE41
+ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
+#if ICBC_USE_SPMD == ICBC_SSE41
     return _mm_blendv_ps(a, b, mask);
 #else
     return _mm_or_ps(_mm_andnot_ps(mask, a), _mm_and_ps(mask, b));
@@ -584,51 +409,52 @@ ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
 }
 
 ICBC_FORCEINLINE bool all(VMask m) {
-    auto zero = _mm_setzero_ps();
-    return _mm_testc_ps(_mm_cmp_ps(zero, zero, _CMP_EQ_UQ), m) == 0;
+    int value = _mm_movemask_ps(m);
+    return value == 0x7;
 }
 
 ICBC_FORCEINLINE bool any(VMask m) {
-    return _mm_testz_ps(m, m) == 0;
+    int value = _mm_movemask_ps(m);
+    return value != 0;
 }
 
 
-#elif ICBC_USE_VEC == ICBC_AVX1 || ICBC_USE_VEC == ICBC_AVX2
+#elif ICBC_USE_SPMD == ICBC_AVX1 || ICBC_USE_SPMD == ICBC_AVX2
 
 #define VEC_SIZE 8
 
-using Vec = __m256;
+using VFloat = __m256;
 using VMask = __m256;   // Emulate mask vector using packed float.
 
-ICBC_FORCEINLINE float & lane(Vec & v, int i) {
+ICBC_FORCEINLINE float & lane(VFloat & v, int i) {
     return v.m256_f32[i];
 }
 
-ICBC_FORCEINLINE Vec vzero() {
+ICBC_FORCEINLINE VFloat vzero() {
     return _mm256_setzero_ps();
 }
 
-ICBC_FORCEINLINE Vec vbroadcast(float a) {
+ICBC_FORCEINLINE VFloat vbroadcast(float a) {
     return _mm256_broadcast_ss(&a);
 }
 
-ICBC_FORCEINLINE Vec vload(float * ptr) {
+ICBC_FORCEINLINE VFloat vload(float * ptr) {
     return _mm256_load_ps(ptr);
 }
 
-ICBC_FORCEINLINE Vec operator+(Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat operator+(VFloat a, VFloat b) {
     return _mm256_add_ps(a, b);
 }
 
-ICBC_FORCEINLINE Vec operator-(Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat operator-(VFloat a, VFloat b) {
     return _mm256_sub_ps(a, b);
 }
 
-ICBC_FORCEINLINE Vec operator*(Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
     return _mm256_mul_ps(a, b);
 }
 
-ICBC_FORCEINLINE Vec vrcp(Vec a) {
+ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 #if ICBC_USE_RCP
     __m256 res = _mm256_rcp_ps(a);
     __m256 muls = _mm256_mul_ps(a, _mm256_mul_ps(res, res));
@@ -639,7 +465,7 @@ ICBC_FORCEINLINE Vec vrcp(Vec a) {
 }
 
 // a*b+c
-ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
+ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) {
 #if ICBC_USE_FMA
     return _mm256_fmadd_ps(a, b, c);
 #else
@@ -647,31 +473,31 @@ ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
 #endif
 }
 
-ICBC_FORCEINLINE Vec vsaturate(Vec a) {
+ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
     __m256 zero = _mm256_setzero_ps();
     __m256 one = _mm256_set1_ps(1.0f);
     return _mm256_min_ps(_mm256_max_ps(a, zero), one);
 }
 
-ICBC_FORCEINLINE Vec vround(Vec a) {
+ICBC_FORCEINLINE VFloat vround(VFloat a) {
     return _mm256_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 }
 
-ICBC_FORCEINLINE Vec lane_id() {
+ICBC_FORCEINLINE VFloat lane_id() {
     return _mm256_set_ps(7, 6, 5, 4, 3, 2, 1, 0);
 }
 
-ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GT_OQ); }
-ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_GE_OQ); }
-ICBC_FORCEINLINE VMask operator< (Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_LT_OQ); }
-ICBC_FORCEINLINE VMask operator<=(Vec A, Vec B) { return _mm256_cmp_ps(A, B, _CMP_LE_OQ); }
+ICBC_FORCEINLINE VMask operator> (VFloat A, VFloat B) { return _mm256_cmp_ps(A, B, _CMP_GT_OQ); }
+ICBC_FORCEINLINE VMask operator>=(VFloat A, VFloat B) { return _mm256_cmp_ps(A, B, _CMP_GE_OQ); }
+ICBC_FORCEINLINE VMask operator< (VFloat A, VFloat B) { return _mm256_cmp_ps(A, B, _CMP_LT_OQ); }
+ICBC_FORCEINLINE VMask operator<=(VFloat A, VFloat B) { return _mm256_cmp_ps(A, B, _CMP_LE_OQ); }
 
 ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return _mm256_or_ps(A, B); }
 ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return _mm256_and_ps(A, B); }
 ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return _mm256_xor_ps(A, B); }
 
 // mask ? b : a
-ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
     return _mm256_blendv_ps(a, b, mask);
 }
 
@@ -685,77 +511,77 @@ ICBC_FORCEINLINE bool any(VMask m) {
 }
 
 
-#elif ICBC_USE_VEC == ICBC_AVX512
+#elif ICBC_USE_SPMD == ICBC_AVX512
 
 #define VEC_SIZE 16
 
-using Vec = __m512;
+using VFloat = __m512;
 struct VMask { __mmask16 m; };
 
-ICBC_FORCEINLINE float & lane(Vec & v, int i) {
+ICBC_FORCEINLINE float & lane(VFloat & v, int i) {
     return v.m512_f32[i];
 }
 
-ICBC_FORCEINLINE Vec vzero() {
+ICBC_FORCEINLINE VFloat vzero() {
     return _mm512_setzero_ps();
 }
 
-ICBC_FORCEINLINE Vec vbroadcast(float a) {
+ICBC_FORCEINLINE VFloat vbroadcast(float a) {
     return _mm512_set1_ps(a);
 }
 
-ICBC_FORCEINLINE Vec vload(float * ptr) {
+ICBC_FORCEINLINE VFloat vload(float * ptr) {
     return _mm512_load_ps(ptr);
 }
 
-ICBC_FORCEINLINE Vec vload(VMask mask, float * ptr) {
+ICBC_FORCEINLINE VFloat vload(VMask mask, float * ptr) {
     return _mm512_mask_load_ps(_mm512_undefined(), mask.m, ptr);
 }
 
-ICBC_FORCEINLINE Vec vload(VMask mask, float * ptr, float fallback) {
+ICBC_FORCEINLINE VFloat vload(VMask mask, float * ptr, float fallback) {
     return _mm512_mask_load_ps(_mm512_set1_ps(fallback), mask.m, ptr);
 }
 
-ICBC_FORCEINLINE Vec operator+(Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat operator+(VFloat a, VFloat b) {
     return _mm512_add_ps(a, b);
 }
 
-ICBC_FORCEINLINE Vec operator-(Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat operator-(VFloat a, VFloat b) {
     return _mm512_sub_ps(a, b);
 }
 
-ICBC_FORCEINLINE Vec operator*(Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
     return _mm512_mul_ps(a, b);
 }
 
-ICBC_FORCEINLINE Vec vrcp(Vec a) {
+ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
     // @@ Use an aproximation?
     return _mm512_div_ps(vbroadcast(1.0f), a);
 }
 
 // a*b+c
-ICBC_FORCEINLINE Vec vmad(Vec a, Vec b, Vec c) {
+ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) {
     return _mm512_fmadd_ps(a, b, c);
 }
 
-ICBC_FORCEINLINE Vec vsaturate(Vec a) {
+ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
     auto zero = _mm512_setzero_ps();
     auto one = _mm512_set1_ps(1.0f);
     return _mm512_min_ps(_mm512_max_ps(a, zero), one);
 }
 
-ICBC_FORCEINLINE Vec vround(Vec a) {
+ICBC_FORCEINLINE VFloat vround(VFloat a) {
     return _mm512_roundscale_ps(a, _MM_FROUND_TO_NEAREST_INT);
 }
 
-ICBC_FORCEINLINE Vec lane_id() {
+ICBC_FORCEINLINE VFloat lane_id() {
     return _mm512_set_ps(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
 }
 
-ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GT_OQ) }; }
-ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GE_OQ) }; }
-ICBC_FORCEINLINE VMask operator< (Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LT_OQ) }; }
-ICBC_FORCEINLINE VMask operator<=(Vec A, Vec B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LE_OQ) }; }
+ICBC_FORCEINLINE VMask operator> (VFloat A, VFloat B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GT_OQ) }; }
+ICBC_FORCEINLINE VMask operator>=(VFloat A, VFloat B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GE_OQ) }; }
+ICBC_FORCEINLINE VMask operator< (VFloat A, VFloat B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LT_OQ) }; }
+ICBC_FORCEINLINE VMask operator<=(VFloat A, VFloat B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LE_OQ) }; }
 
 ICBC_FORCEINLINE VMask operator! (VMask A) { return { _mm512_knot(A.m) }; }
 ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return { _mm512_kor(A.m, B.m) }; }
@@ -763,7 +589,7 @@ ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return { _mm512_kand(A.m, 
 ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return { _mm512_kxor(A.m, B.m) }; }
 
 // mask ? b : a
-ICBC_FORCEINLINE Vec vselect(VMask mask, Vec a, Vec b) {
+ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
     return _mm512_mask_blend_ps(mask.m, a, b);
 }
 
@@ -777,24 +603,24 @@ ICBC_FORCEINLINE bool any(VMask mask) {
 
 #endif // ICBC_AVX512
 
-#if ICBC_USE_VEC
+#if ICBC_USE_SPMD
 
-struct Vector3_Vec {
-    Vec x;
-    Vec y;
-    Vec z;
+struct VVector3 {
+    VFloat x;
+    VFloat y;
+    VFloat z;
 };
 
-ICBC_FORCEINLINE Vector3_Vec vbroadcast(Vector3 v) {
-    Vector3_Vec v8;
+ICBC_FORCEINLINE VVector3 vbroadcast(Vector3 v) {
+    VVector3 v8;
     v8.x = vbroadcast(v.x);
     v8.y = vbroadcast(v.y);
     v8.z = vbroadcast(v.z);
     return v8;
 }
 
-ICBC_FORCEINLINE Vector3_Vec vbroadcast(float x, float y, float z) {
-    Vector3_Vec v8;
+ICBC_FORCEINLINE VVector3 vbroadcast(float x, float y, float z) {
+    VVector3 v8;
     v8.x = vbroadcast(x);
     v8.y = vbroadcast(y);
     v8.z = vbroadcast(z);
@@ -802,91 +628,91 @@ ICBC_FORCEINLINE Vector3_Vec vbroadcast(float x, float y, float z) {
 }
 
 
-ICBC_FORCEINLINE Vector3_Vec operator+(Vector3_Vec a, Vector3_Vec b) {
-    Vector3_Vec v8;
+ICBC_FORCEINLINE VVector3 operator+(VVector3 a, VVector3 b) {
+    VVector3 v8;
     v8.x = (a.x + b.x);
     v8.y = (a.y + b.y);
     v8.z = (a.z + b.z);
     return v8;
 }
 
-ICBC_FORCEINLINE Vector3_Vec operator-(Vector3_Vec a, Vector3_Vec b) {
-    Vector3_Vec v8;
+ICBC_FORCEINLINE VVector3 operator-(VVector3 a, VVector3 b) {
+    VVector3 v8;
     v8.x = (a.x - b.x);
     v8.y = (a.y - b.y);
     v8.z = (a.z - b.z);
     return v8;
 }
 
-ICBC_FORCEINLINE Vector3_Vec operator*(Vector3_Vec a, Vector3_Vec b) {
-    Vector3_Vec v8;
+ICBC_FORCEINLINE VVector3 operator*(VVector3 a, VVector3 b) {
+    VVector3 v8;
     v8.x = (a.x * b.x);
     v8.y = (a.y * b.y);
     v8.z = (a.z * b.z);
     return v8;
 }
 
-ICBC_FORCEINLINE Vector3_Vec operator*(Vector3_Vec a, Vec b) {
-    Vector3_Vec v8;
+ICBC_FORCEINLINE VVector3 operator*(VVector3 a, VFloat b) {
+    VVector3 v8;
     v8.x = (a.x * b);
     v8.y = (a.y * b);
     v8.z = (a.z * b);
     return v8;
 }
 
-ICBC_FORCEINLINE Vector3_Vec vmad(Vector3_Vec a, Vector3_Vec b, Vector3_Vec c) {
-    Vector3_Vec v8;
+ICBC_FORCEINLINE VVector3 vmad(VVector3 a, VVector3 b, VVector3 c) {
+    VVector3 v8;
     v8.x = vmad(a.x, b.x, c.x);
     v8.y = vmad(a.y, b.y, c.y);
     v8.z = vmad(a.z, b.z, c.z);
     return v8;
 }
 
-ICBC_FORCEINLINE Vector3_Vec vmad(Vector3_Vec a, Vec b, Vector3_Vec c) {
-    Vector3_Vec v8;
+ICBC_FORCEINLINE VVector3 vmad(VVector3 a, VFloat b, VVector3 c) {
+    VVector3 v8;
     v8.x = vmad(a.x, b, c.x);
     v8.y = vmad(a.y, b, c.y);
     v8.z = vmad(a.z, b, c.z);
     return v8;
 }
 
-ICBC_FORCEINLINE Vector3_Vec vsaturate(Vector3_Vec v) {
-    Vector3_Vec r;
+ICBC_FORCEINLINE VVector3 vsaturate(VVector3 v) {
+    VVector3 r;
     r.x = vsaturate(v.x);
     r.y = vsaturate(v.y);
     r.z = vsaturate(v.z);
     return r;
 }
 
-ICBC_FORCEINLINE Vector3_Vec vround_ept(Vector3_Vec v) {
-    const Vec rb_scale = vbroadcast(31.0f);
-    const Vec rb_inv_scale = vbroadcast(1.0f / 31.0f);
-    const Vec g_scale = vbroadcast(63.0f);
-    const Vec g_inv_scale = vbroadcast(1.0f / 63.0f);
+ICBC_FORCEINLINE VVector3 vround_ept(VVector3 v) {
+    const VFloat rb_scale = vbroadcast(31.0f);
+    const VFloat rb_inv_scale = vbroadcast(1.0f / 31.0f);
+    const VFloat g_scale = vbroadcast(63.0f);
+    const VFloat g_inv_scale = vbroadcast(1.0f / 63.0f);
 
-    Vector3_Vec r;
+    VVector3 r;
     r.x = vround(v.x * rb_scale) * rb_inv_scale;
     r.y = vround(v.y * g_scale) * g_inv_scale;
     r.z = vround(v.z * rb_scale) * rb_inv_scale;
     return r;
 }
 
-ICBC_FORCEINLINE Vec vdot(Vector3_Vec a, Vector3_Vec b) {
-    Vec r;
+ICBC_FORCEINLINE VFloat vdot(VVector3 a, VVector3 b) {
+    VFloat r;
     r = a.x * b.x + a.y * b.y + a.z * b.z;
     return r;
 }
 
 // mask ? b : a
-ICBC_FORCEINLINE Vector3_Vec vselect(VMask mask, Vector3_Vec a, Vector3_Vec b) {
-    Vector3_Vec r;
+ICBC_FORCEINLINE VVector3 vselect(VMask mask, VVector3 a, VVector3 b) {
+    VVector3 r;
     r.x = vselect(mask, a.x, b.x);
     r.y = vselect(mask, a.y, b.y);
     r.z = vselect(mask, a.z, b.z);
     return r;
 }
 
-#endif // ICBC_USE_VEC
+#endif // ICBC_USE_SPMD
 
 
 
@@ -986,7 +812,7 @@ static int reduce_colors(const Vector4 * input_colors, const float * input_weigh
         float wi = input_weights[i];
 
         if (wi > 0) {
-            const float threshold = 1.0 / 256;
+            const float threshold = 1.0f / 256;
 
             // Find matching color.
             int j;
@@ -1063,21 +889,12 @@ private:
 
     uint m_count;
 
-#if ICBC_USE_SIMD
-    ICBC_ALIGN_16 SimdVector m_colors[16];  // color | weight
-    SimdVector m_metric;                    // vec3
-    SimdVector m_metricSqr;                 // vec3
-    SimdVector m_xxsum;                     // color | weight
-    SimdVector m_xsum;                      // color | weight (wsum)
-#else
     Vector3 m_colors[16];
     float m_weights[16];
     Vector3 m_metric;
     Vector3 m_metricSqr;
-    Vector3 m_xxsum;
     Vector3 m_xsum;
     float m_wsum;
-#endif
 };
 
 
@@ -1175,14 +992,7 @@ static Vector3 computePrincipalComponent_PowerMethod(int n, const Vector3 *__res
 
 void ClusterFit::setErrorMetric(const Vector3 & metric)
 {
-#if ICBC_USE_SIMD
-    ICBC_ALIGN_16 Vector4 tmp;
-    tmp.xyz = metric;
-    tmp.w = 1;
-    m_metric = SimdVector(&tmp.x);
-#else
     m_metric = metric;
-#endif
     m_metricSqr = m_metric * m_metric;
 }
 
@@ -1216,41 +1026,49 @@ void ClusterFit::setColorSet(const Vector3 * colors, const float * weights, int 
         }
     }
 
-    // I often wondered of often you end up with ties when sorting the colors along the principal axis. The answer is very few.
-    /*static int ties = 0;
-    for (uint i = 1; i < m_count; ++i) {
-        if (dps[i - 1] == dps[i]) 
-            ties += 1;
-    }*/
-
     // weight all the points
-#if ICBC_USE_SIMD
-    m_xxsum = SimdVector(0.0f);
-    m_xsum = SimdVector(0.0f);
-#else
-    m_xxsum = { 0.0f };
     m_xsum = { 0.0f };
     m_wsum = 0.0f;
-#endif
 
     for (uint i = 0; i < m_count; ++i)
     {
         int p = order[i];
-#if ICBC_USE_SIMD
-        ICBC_ALIGN_16 Vector4 tmp;
-        tmp.xyz = colors[p];
-        tmp.w = 1;
-        m_colors[i] = SimdVector(&tmp.x) * SimdVector(weights[p]);
-        m_xxsum += m_colors[i] * m_colors[i];
-        m_xsum += m_colors[i];
-#else
         m_colors[i] = colors[p] * weights[p];
-        m_xxsum += m_colors[i] * m_colors[i];
         m_xsum += m_colors[i];
         m_weights[i] = weights[p];
         m_wsum += m_weights[i];
-#endif
     }
+
+    /*if (m_count > 4)
+    {
+        float threshold = 1.0f / 128;
+
+        uint j = 0;
+        for (uint i = 0; i < m_count; ++i)
+        {
+            // @@ Compare 3D distance instead of projected distance?
+            //if (j > 0 && dps[i] - dps[j - 1] < threshold) {
+            if (j > 0 && lengthSquared(colors[order[i]] - colors[order[j - 1]]) < threshold*threshold) {
+                m_colors[j - 1] += m_colors[i];
+                m_weights[j - 1] += m_weights[i];
+            }
+            else {
+                m_colors[j] = m_colors[i];
+                m_weights[j] = m_weights[i];
+                j += 1;
+            }
+        }
+
+        m_count = j;
+
+        m_xsum = { 0.0f };
+        m_wsum = 0.0f;
+        for (uint i = 0, j = 0; i < m_count; ++i)
+        {
+            m_xsum += m_colors[i];
+            m_wsum += m_weights[i];
+        }
+    }*/
 }
 
 void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
@@ -1288,32 +1106,16 @@ void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
     }
 
     // weight all the points
-#if ICBC_USE_SIMD
-    m_xxsum = SimdVector(0.0f);
-    m_xsum = SimdVector(0.0f);
-#else
-    m_xxsum = { 0.0f };
     m_xsum = { 0.0f };
     m_wsum = 0.0f;
-#endif
 
     for (uint i = 0; i < 16; ++i)
     {
         int p = order[i];
-#if ICBC_USE_SIMD
-        ICBC_ALIGN_16 Vector4 tmp;
-        tmp.xyz = colors[p].xyz;
-        tmp.w = 1;
-        m_colors[i] = SimdVector(&tmp.x);
-        m_xxsum += m_colors[i] * m_colors[i];
-        m_xsum += m_colors[i];
-#else
         m_colors[i] = colors[p].xyz;
-        m_xxsum += m_colors[i] * m_colors[i];
         m_xsum += m_colors[i];
         m_weights[i] = 1.0f;
         m_wsum += m_weights[i];
-#endif
     }
 }
 
@@ -1470,488 +1272,8 @@ static void init_cluster_tables() {
     for (int i = 0; i < 8; i++) {
         s_threeCluster[152 + i] = s_threeCluster[152 - 1];
     }
-
-    /*
-    for (int i = 0; i < 16; i++) {
-        printf("%d, ", s_fourClusterTotal[i] + 1);
-    }
-    printf("\n");
-
-    for (int i = 0; i < 16; i++) {
-        printf("%d, ", s_threeClusterTotal[i] + 1);
-    }
-    printf("\n\n");
-    */
 }
 
-
-#if ICBC_USE_SIMD
-
-void ClusterFit::compress3(Vector3 * start, Vector3 * end)
-{
-    const int count = m_count;
-    const SimdVector one = SimdVector(1.0f);
-    const SimdVector zero = SimdVector(0.0f);
-    const SimdVector half(0.5f, 0.5f, 0.5f, 0.25f);
-    const SimdVector two = SimdVector(2.0);
-    const SimdVector grid(31.0f, 63.0f, 31.0f, 0.0f);
-    const SimdVector gridrcp(1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f, 0.0f);
-
-    // declare variables
-    SimdVector beststart = SimdVector(0.0f);
-    SimdVector bestend = SimdVector(0.0f);
-    SimdVector besterror = SimdVector(FLT_MAX);
-
-    SimdVector x0 = zero;
-
-    // check all possible clusters for this total order
-    for (int c0 = 0; c0 <= count; c0++)
-    {
-        SimdVector x1 = zero;
-
-        for (int c1 = 0; c1 <= count - c0; c1++)
-        {
-            const SimdVector x2 = m_xsum - x1 - x0;
-
-            //Vector3 alphax_sum = x0 + x1 * 0.5f;
-            //float alpha2_sum = w0 + w1 * 0.25f;
-            const SimdVector alphax_sum = multiplyAdd(x1, half, x0); // alphax_sum, alpha2_sum
-            const SimdVector alpha2_sum = alphax_sum.splatW();
-
-            //const Vector3 betax_sum = x2 + x1 * 0.5f;
-            //const float beta2_sum = w2 + w1 * 0.25f;
-            const SimdVector betax_sum = multiplyAdd(x1, half, x2); // betax_sum, beta2_sum
-            const SimdVector beta2_sum = betax_sum.splatW();
-
-            //const float alphabeta_sum = w1 * 0.25f;
-            const SimdVector alphabeta_sum = (x1 * half).splatW(); // alphabeta_sum
-
-            // const float factor = 1.0f / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
-            const SimdVector factor = reciprocal(negativeMultiplySubtract(alphabeta_sum, alphabeta_sum, alpha2_sum*beta2_sum));
-
-            SimdVector a = negativeMultiplySubtract(betax_sum, alphabeta_sum, alphax_sum*beta2_sum) * factor;
-            SimdVector b = negativeMultiplySubtract(alphax_sum, alphabeta_sum, betax_sum*alpha2_sum) * factor;
-
-            // clamp to the grid
-            a = min(one, max(zero, a));
-            b = min(one, max(zero, b));
-            a = truncate(multiplyAdd(grid, a, half)) * gridrcp;
-            b = truncate(multiplyAdd(grid, b, half)) * gridrcp;
-
-            // compute the error (we skip the constant xxsum)
-            SimdVector e1 = multiplyAdd(a*a, alpha2_sum, b*b*beta2_sum);
-            SimdVector e2 = negativeMultiplySubtract(a, alphax_sum, a*b*alphabeta_sum);
-            SimdVector e3 = negativeMultiplySubtract(b, betax_sum, e2);
-            SimdVector e4 = multiplyAdd(two, e3, e1);
-
-            // apply the metric to the error term
-            SimdVector e5 = e4 * m_metricSqr;
-            SimdVector error = e5.splatX() + e5.splatY() + e5.splatZ();
-
-            // keep the solution if it wins
-            if (compareAnyLessThan(error, besterror))
-            {
-                besterror = error;
-                beststart = a;
-                bestend = b;
-            }
-
-            x1 += m_colors[c0 + c1];
-        }
-
-        x0 += m_colors[c0];
-    }
-
-    *start = beststart.toVector3();
-    *end = bestend.toVector3();
-}
-
-void ClusterFit::compress4(Vector3 * start, Vector3 * end)
-{
-    const int count = m_count;
-    const SimdVector one = SimdVector(1.0f);
-    const SimdVector zero = SimdVector(0.0f);
-    const SimdVector half = SimdVector(0.5f);
-    const SimdVector two = SimdVector(2.0);
-    const SimdVector onethird(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 9.0f);
-    const SimdVector twothirds(2.0f / 3.0f, 2.0f / 3.0f, 2.0f / 3.0f, 4.0f / 9.0f);
-    const SimdVector twonineths = SimdVector(2.0f / 9.0f);
-    const SimdVector grid(31.0f, 63.0f, 31.0f, 0.0f);
-    const SimdVector gridrcp(1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f, 0.0f);
-
-    // declare variables
-    SimdVector beststart = SimdVector(0.0f);
-    SimdVector bestend = SimdVector(0.0f);
-    SimdVector besterror = SimdVector(FLT_MAX);
-
-#if !ICBC_USE_SAT
-    SimdVector x0 = zero;
-
-    // check all possible clusters for this total order
-    for (int c0 = 0; c0 <= count; c0++)
-    {
-        SimdVector x1 = zero;
-
-        for (int c1 = 0; c1 <= count - c0; c1++)
-        {
-            SimdVector x2 = zero;
-
-            for (int c2 = 0; c2 <= count - c0 - c1; c2++)
-            {
-                const SimdVector x3 = m_xsum - x2 - x1 - x0;
-
-                //const Vector3 alphax_sum = x0 + x1 * (2.0f / 3.0f) + x2 * (1.0f / 3.0f);
-                //const float alpha2_sum = w0 + w1 * (4.0f/9.0f) + w2 * (1.0f/9.0f);
-                const SimdVector alphax_sum = multiplyAdd(x2, onethird, multiplyAdd(x1, twothirds, x0)); // alphax_sum, alpha2_sum
-                const SimdVector alpha2_sum = alphax_sum.splatW();
-
-                //const Vector3 betax_sum = x3 + x2 * (2.0f / 3.0f) + x1 * (1.0f / 3.0f);
-                //const float beta2_sum = w3 + w2 * (4.0f/9.0f) + w1 * (1.0f/9.0f);
-                const SimdVector betax_sum = multiplyAdd(x2, twothirds, multiplyAdd(x1, onethird, x3)); // betax_sum, beta2_sum
-                const SimdVector beta2_sum = betax_sum.splatW();
-
-                //const float alphabeta_sum = (w1 + w2) * (2.0f/9.0f);
-                const SimdVector alphabeta_sum = twonineths * (x1 + x2).splatW(); // alphabeta_sum
-
-                //const float factor = 1.0f / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
-                const SimdVector factor = reciprocal(negativeMultiplySubtract(alphabeta_sum, alphabeta_sum, alpha2_sum*beta2_sum));
-
-                SimdVector a = negativeMultiplySubtract(betax_sum, alphabeta_sum, alphax_sum*beta2_sum) * factor;
-                SimdVector b = negativeMultiplySubtract(alphax_sum, alphabeta_sum, betax_sum*alpha2_sum) * factor;
-
-                // clamp to the grid
-                a = min(one, max(zero, a));
-                b = min(one, max(zero, b));
-                a = truncate(multiplyAdd(grid, a, half)) * gridrcp;
-                b = truncate(multiplyAdd(grid, b, half)) * gridrcp;
-
-                // compute the error (we skip the constant xxsum)
-                // error = a*a*alpha2_sum + b*b*beta2_sum + 2.0f*( a*b*alphabeta_sum - a*alphax_sum - b*betax_sum );
-                SimdVector e1 = multiplyAdd(a*a, alpha2_sum, b*b*beta2_sum);
-                SimdVector e2 = negativeMultiplySubtract(a, alphax_sum, a*b*alphabeta_sum);
-                SimdVector e3 = negativeMultiplySubtract(b, betax_sum, e2);
-                SimdVector e4 = multiplyAdd(two, e3, e1);
-
-                // apply the metric to the error term
-                SimdVector e5 = e4 * m_metricSqr;
-                SimdVector error = e5.splatX() + e5.splatY() + e5.splatZ();
-
-                // keep the solution if it wins
-                if (compareAnyLessThan(error, besterror))
-                {
-                    besterror = error;
-                    beststart = a;
-                    bestend = b;
-                }
-
-                x2 += m_colors[c0 + c1 + c2];
-            }
-
-            x1 += m_colors[c0 + c1];
-        }
-
-        x0 += m_colors[c0];
-    }
-#else
-
-    // This could be done in set colors.
-    ICBC_ALIGN_16 SimdVector x_sat[17];
-    SimdVector x_sum = zero;
-    for (int i = 0; i < count; i++) {
-        x_sat[i] = x_sum;
-        x_sum += m_colors[i];
-    }
-    x_sat[count] = x_sum;
-
-    // check all possible clusters for this total order
-    for (int i = 0; i < s_fourClusterTotal[count - 1]; i += ICBC_SAT_INC)
-    {
-        uint c0 = s_fourCluster[i].c0;
-        uint c1 = s_fourCluster[i].c1;
-        uint c2 = s_fourCluster[i].c2;
-        //ICBC_ASSERT(c2 <= count);
-
-        SimdVector x0 = x_sat[c0];
-        SimdVector x1 = x_sat[c1] - x_sat[c0];
-        SimdVector x2 = x_sat[c2] - x_sat[c1];
-
-        const SimdVector x3 = m_xsum - x2 - x1 - x0;
-
-        //const Vector3 alphax_sum = x0 + x1 * (2.0f / 3.0f) + x2 * (1.0f / 3.0f);
-        //const float alpha2_sum = w0 + w1 * (4.0f/9.0f) + w2 * (1.0f/9.0f);
-        const SimdVector alphax_sum = multiplyAdd(x2, onethird, multiplyAdd(x1, twothirds, x0)); // alphax_sum, alpha2_sum
-        const SimdVector alpha2_sum = alphax_sum.splatW();
-
-        //const Vector3 betax_sum = x3 + x2 * (2.0f / 3.0f) + x1 * (1.0f / 3.0f);
-        //const float beta2_sum = w3 + w2 * (4.0f/9.0f) + w1 * (1.0f/9.0f);
-        const SimdVector betax_sum = multiplyAdd(x2, twothirds, multiplyAdd(x1, onethird, x3)); // betax_sum, beta2_sum
-        const SimdVector beta2_sum = betax_sum.splatW();
-
-        //const float alphabeta_sum = (w1 + w2) * (2.0f/9.0f);
-        const SimdVector alphabeta_sum = twonineths * (x1 + x2).splatW(); // alphabeta_sum
-
-        //const float factor = 1.0f / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
-        const SimdVector factor = reciprocal(negativeMultiplySubtract(alphabeta_sum, alphabeta_sum, alpha2_sum*beta2_sum));
-
-        SimdVector a = negativeMultiplySubtract(betax_sum, alphabeta_sum, alphax_sum*beta2_sum) * factor;
-        SimdVector b = negativeMultiplySubtract(alphax_sum, alphabeta_sum, betax_sum*alpha2_sum) * factor;
-
-        // clamp to the grid
-        a = min(one, max(zero, a));
-        b = min(one, max(zero, b));
-        a = truncate(multiplyAdd(grid, a, half)) * gridrcp;
-        b = truncate(multiplyAdd(grid, b, half)) * gridrcp;
-
-        // compute the error (we skip the constant xxsum)
-        // error = a*a*alpha2_sum + b*b*beta2_sum + 2.0f*( a*b*alphabeta_sum - a*alphax_sum - b*betax_sum );
-        SimdVector e1 = multiplyAdd(a*a, alpha2_sum, b*b*beta2_sum);
-        SimdVector e2 = negativeMultiplySubtract(a, alphax_sum, a*b*alphabeta_sum);
-        SimdVector e3 = negativeMultiplySubtract(b, betax_sum, e2);
-        SimdVector e4 = multiplyAdd(two, e3, e1);
-
-        // apply the metric to the error term
-        SimdVector e5 = e4 * m_metricSqr;
-        SimdVector error = e5.splatX() + e5.splatY() + e5.splatZ();
-
-        // keep the solution if it wins
-        if (compareAnyLessThan(error, besterror))
-        {
-            besterror = error;
-            beststart = a;
-            bestend = b;
-        }
-    }
-#endif
-
-    *start = beststart.toVector3();
-    *end = bestend.toVector3();
-}
-
-#if ICBC_FAST_CLUSTER_FIT
-
-void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
-{
-    ICBC_ASSERT(m_count == 16);
-    const SimdVector one = SimdVector(1.0f);
-    const SimdVector zero = SimdVector(0.0f);
-    const SimdVector half(0.5f, 0.5f, 0.5f, 0.25f);
-    const SimdVector two = SimdVector(2.0);
-    const SimdVector grid(31.0f, 63.0f, 31.0f, 0.0f);
-    const SimdVector gridrcp(1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f, 0.0f);
-
-    // declare variables
-    SimdVector beststart = SimdVector(0.0f);
-    SimdVector bestend = SimdVector(0.0f);
-    SimdVector besterror = SimdVector(FLT_MAX);
-
-    SimdVector x0 = zero;
-
-    // check all possible clusters for this total order
-    for (int c0 = 0, i = 0; c0 <= 16; c0++)
-    {
-        SimdVector x1 = zero;
-
-        for (int c1 = 0; c1 <= 16 - c0; c1++, i++)
-        {
-            const SimdVector constants = SimdVector((const float *)&s_threeElement[i]);
-
-            const SimdVector alpha2_sum = constants.splatX();
-            const SimdVector beta2_sum = constants.splatY();
-            const SimdVector alphabeta_sum = constants.splatZ();
-            const SimdVector factor = constants.splatW();
-
-            const SimdVector alphax_sum = multiplyAdd(x1, half, x0);
-            const SimdVector betax_sum = m_xsum - alphax_sum;
-
-            SimdVector a = negativeMultiplySubtract(betax_sum, alphabeta_sum, alphax_sum*beta2_sum) * factor;
-            SimdVector b = negativeMultiplySubtract(alphax_sum, alphabeta_sum, betax_sum*alpha2_sum) * factor;
-
-            // clamp to the grid
-            a = min(one, max(zero, a));
-            b = min(one, max(zero, b));
-            a = truncate(multiplyAdd(grid, a, half)) * gridrcp;
-            b = truncate(multiplyAdd(grid, b, half)) * gridrcp;
-
-            // compute the error (we skip the constant xxsum)
-            SimdVector e1 = multiplyAdd(a*a, alpha2_sum, b*b*beta2_sum);
-            SimdVector e2 = negativeMultiplySubtract(a, alphax_sum, a*b*alphabeta_sum);
-            SimdVector e3 = negativeMultiplySubtract(b, betax_sum, e2);
-            SimdVector e4 = multiplyAdd(two, e3, e1);
-
-            // apply the metric to the error term
-            SimdVector e5 = e4 * m_metricSqr;
-            SimdVector error = e5.splatX() + e5.splatY() + e5.splatZ();
-
-            // keep the solution if it wins
-            if (compareAnyLessThan(error, besterror))
-            {
-                besterror = error;
-                beststart = a;
-                bestend = b;
-            }
-
-            x1 += m_colors[c0 + c1];
-        }
-
-        x0 += m_colors[c0];
-    }
-
-    *start = beststart.toVector3();
-    *end = bestend.toVector3();
-}
-
-void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
-{
-    ICBC_ASSERT(m_count == 16);
-    const SimdVector one = SimdVector(1.0f);
-    const SimdVector zero = SimdVector(0.0f);
-    const SimdVector half = SimdVector(0.5f);
-    const SimdVector two = SimdVector(2.0);
-    const SimdVector onethird(1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 3.0f, 1.0f / 9.0f);
-    const SimdVector twothirds(2.0f / 3.0f, 2.0f / 3.0f, 2.0f / 3.0f, 4.0f / 9.0f);
-    const SimdVector grid(31.0f, 63.0f, 31.0f, 0.0f);
-    const SimdVector gridrcp(1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f, 0.0f);
-
-    // declare variables
-    SimdVector beststart = SimdVector(0.0f);
-    SimdVector bestend = SimdVector(0.0f);
-    SimdVector besterror = SimdVector(FLT_MAX);
-
-
-#if ICBC_USE_SAT
-    // This could be done in set colors.
-    ICBC_ALIGN_16 SimdVector x_sat[17];
-    SimdVector x_sum = zero;
-    for (int i = 0; i < 16; i++) {
-        x_sat[i] = x_sum;
-        x_sum += m_colors[i];
-    }
-    x_sat[16] = x_sum;
-
-    // check all possible clusters for this total order
-    for (int i = 0; i < 969; i += ICBC_SAT_INC)
-    {
-        uint c0 = s_fourCluster[i].c0;
-        uint c1 = s_fourCluster[i].c1;
-        uint c2 = s_fourCluster[i].c2;
-        //ICBC_ASSERT(c2 <= count);
-
-        SimdVector x0 = x_sat[c0];
-        SimdVector x1 = x_sat[c1] - x_sat[c0];
-        SimdVector x2 = x_sat[c2] - x_sat[c1];
-
-        //const SimdVector x3 = m_xsum - x2 - x1 - x0;
-
-        const SimdVector constants = SimdVector((const float *)&s_fourElement[i]);
-
-        const SimdVector alpha2_sum = constants.splatX();
-        const SimdVector beta2_sum = constants.splatY();
-        const SimdVector alphabeta_sum = constants.splatZ();
-        const SimdVector factor = constants.splatW();
-
-        const SimdVector alphax_sum = multiplyAdd(x2, onethird, multiplyAdd(x1, twothirds, x0));
-        const SimdVector betax_sum = m_xsum - alphax_sum;
-
-        SimdVector a = negativeMultiplySubtract(betax_sum, alphabeta_sum, alphax_sum*beta2_sum) * factor;
-        SimdVector b = negativeMultiplySubtract(alphax_sum, alphabeta_sum, betax_sum*alpha2_sum) * factor;
-
-        // clamp to the grid
-        a = min(one, max(zero, a));
-        b = min(one, max(zero, b));
-        a = truncate(multiplyAdd(grid, a, half)) * gridrcp;
-        b = truncate(multiplyAdd(grid, b, half)) * gridrcp;
-
-        // compute the error (we skip the constant xxsum)
-        // error = a*a*alpha2_sum + b*b*beta2_sum + 2.0f*( a*b*alphabeta_sum - a*alphax_sum - b*betax_sum );
-        SimdVector e1 = multiplyAdd(a*a, alpha2_sum, b*b*beta2_sum);
-        SimdVector e2 = negativeMultiplySubtract(a, alphax_sum, a*b*alphabeta_sum);
-        SimdVector e3 = negativeMultiplySubtract(b, betax_sum, e2);
-        SimdVector e4 = multiplyAdd(two, e3, e1);
-
-        // apply the metric to the error term
-        SimdVector e5 = e4 * m_metricSqr;
-        SimdVector error = e5.splatX() + e5.splatY() + e5.splatZ();
-
-        // keep the solution if it wins
-        if (compareAnyLessThan(error, besterror))
-        {
-            besterror = error;
-            beststart = a;
-            bestend = b;
-        }
-
-        x2 += m_colors[c0 + c1 + c2];
-    }
-
-#else
-    SimdVector x0 = zero;
-
-    // check all possible clusters for this total order
-    for (int c0 = 0, i = 0; c0 <= 16; c0++)
-    {
-        SimdVector x1 = zero;
-
-        for (int c1 = 0; c1 <= 16 - c0; c1++)
-        {
-            SimdVector x2 = zero;
-
-            for (int c2 = 0; c2 <= 16 - c0 - c1; c2++, i++)
-            {
-                const SimdVector constants = SimdVector((const float *)&s_fourElement[i]); 
-
-                const SimdVector alpha2_sum = constants.splatX();
-                const SimdVector beta2_sum = constants.splatY();
-                const SimdVector alphabeta_sum = constants.splatZ();
-                const SimdVector factor = constants.splatW();
-                
-                const SimdVector alphax_sum = multiplyAdd(x2, onethird, multiplyAdd(x1, twothirds, x0));
-                const SimdVector betax_sum = m_xsum - alphax_sum;
-
-                SimdVector a = negativeMultiplySubtract(betax_sum, alphabeta_sum, alphax_sum*beta2_sum) * factor;
-                SimdVector b = negativeMultiplySubtract(alphax_sum, alphabeta_sum, betax_sum*alpha2_sum) * factor;
-
-                // clamp to the grid
-                a = min(one, max(zero, a));
-                b = min(one, max(zero, b));
-                a = truncate(multiplyAdd(grid, a, half)) * gridrcp;
-                b = truncate(multiplyAdd(grid, b, half)) * gridrcp;
-
-                // compute the error (we skip the constant xxsum)
-                // error = a*a*alpha2_sum + b*b*beta2_sum + 2.0f*( a*b*alphabeta_sum - a*alphax_sum - b*betax_sum );
-                SimdVector e1 = multiplyAdd(a*a, alpha2_sum, b*b*beta2_sum);
-                SimdVector e2 = negativeMultiplySubtract(a, alphax_sum, a*b*alphabeta_sum);
-                SimdVector e3 = negativeMultiplySubtract(b, betax_sum, e2);
-                SimdVector e4 = multiplyAdd(two, e3, e1);
-
-                // apply the metric to the error term
-                SimdVector e5 = e4 * m_metricSqr;
-                SimdVector error = e5.splatX() + e5.splatY() + e5.splatZ();
-
-                // keep the solution if it wins
-                if (compareAnyLessThan(error, besterror))
-                {
-                    besterror = error;
-                    beststart = a;
-                    bestend = b;
-                }
-
-                x2 += m_colors[c0 + c1 + c2];
-            }
-
-            x1 += m_colors[c0 + c1];
-        }
-
-        x0 += m_colors[c0];
-    }
-#endif
-
-    *start = beststart.toVector3();
-    *end = bestend.toVector3();
-}
-
-#endif // ICBC_FAST_CLUSTER_FIT
-
-#else
 
 // This is the ideal way to round, but it's too expensive to do this in the inner loop.
 inline Vector3 round565(const Vector3 & v) {
@@ -1977,7 +1299,7 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
     Vector3 bestend = { 0.0f };
     float besterror = FLT_MAX;
 
-#if ICBC_USE_VEC
+#if ICBC_USE_SPMD
 
 // @@ Use the same SAT for both methods.
 #if ICBC_USE_AVX2_GATHER
@@ -2019,25 +1341,27 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
     }
 #endif
 
-    Vec vbesterror = vbroadcast(FLT_MAX);
-    Vector3_Vec vbeststart = { vzero(), vzero(), vzero() };
-    Vector3_Vec vbestend = { vzero(), vzero(), vzero() };
+    VFloat vbesterror = vbroadcast(FLT_MAX);
+    VVector3 vbeststart = { vzero(), vzero(), vzero() };
+    VVector3 vbestend = { vzero(), vzero(), vzero() };
 
     // check all possible clusters for this total order
     const int total_order_count = s_threeClusterTotal[count - 1];
 
     for (int i = 0; i < total_order_count; i += VEC_SIZE)
     {
-        Vector3_Vec x0, x1;
-        Vec w0, w1;
+        VVector3 x0, x1;
+        VFloat w0, w1;
 
 #if ICBC_USE_AVX512_PERMUTE
 
+        auto loadmask = lane_id() < vbroadcast(float(count));
+
         // Load sat in one register:
-        Vec vrsat = vload(r_sat);
-        Vec vgsat = vload(g_sat);
-        Vec vbsat = vload(b_sat);
-        Vec vwsat = vload(w_sat);
+        VFloat vrsat = vload(loadmask, r_sat, FLT_MAX);
+        VFloat vgsat = vload(loadmask, g_sat, FLT_MAX);
+        VFloat vbsat = vload(loadmask, b_sat, FLT_MAX);
+        VFloat vwsat = vload(loadmask, w_sat, FLT_MAX);
 
         // Load 4 uint8 per lane.
         __m512i packedClusterIndex = _mm512_load_si512((__m512i *)&s_threeCluster[i]);
@@ -2047,6 +1371,7 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
         auto c0mask = _mm512_cmpgt_epi32_mask(c0, _mm512_setzero_si512());
         c0 = _mm512_sub_epi32(c0, _mm512_set1_epi32(1));
 
+        // @@ Avoid blend_ps?
         // if upper bit set, zero, otherwise load sat entry.
         x0.x = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vrsat));
         x0.y = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vgsat));
@@ -2064,6 +1389,7 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
 
 #elif ICBC_USE_AVX2_PERMUTE2
         // Fabian Giesen says not to mix _mm256_blendv_ps and _mm256_permutevar8x32_ps since they contend for the same resources and instead emulate blendv using bit ops.
+        // On my machine (Intel Skylake) I'm not seeing any performance difference, but this may still be valuable for older CPUs.
 
         // Load 4 uint8 per lane.
         __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_threeCluster[i]);
@@ -2071,10 +1397,10 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
         if (count <= 8) {
 
             // Load r_sat in one register:
-            Vec r07 = vload(r_sat);
-            Vec g07 = vload(g_sat);
-            Vec b07 = vload(b_sat);
-            Vec w07 = vload(w_sat);
+            VFloat r07 = vload(r_sat);
+            VFloat g07 = vload(g_sat);
+            VFloat b07 = vload(b_sat);
+            VFloat w07 = vload(w_sat);
 
             // Load index and decrement.
             auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
@@ -2107,10 +1433,10 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
             //lookup &= unpacked_ind > 0;
 
             // Load r_sat in two registers:
-            Vec rLo = vload(r_sat); Vec rHi = vload(r_sat + 8);
-            Vec gLo = vload(g_sat); Vec gHi = vload(g_sat + 8);
-            Vec bLo = vload(b_sat); Vec bHi = vload(b_sat + 8);
-            Vec wLo = vload(w_sat); Vec wHi = vload(w_sat + 8);
+            VFloat rLo = vload(r_sat); VFloat rHi = vload(r_sat + 8);
+            VFloat gLo = vload(g_sat); VFloat gHi = vload(g_sat + 8);
+            VFloat bLo = vload(b_sat); VFloat bHi = vload(b_sat + 8);
+            VFloat wLo = vload(w_sat); VFloat wHi = vload(w_sat + 8);
 
             auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
             auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
@@ -2160,29 +1486,29 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
             // Load sat in one register.
             // if upper bit set, zero, otherwise load sat entry.
 
-            Vec r07 = vload(r_sat);
+            VFloat r07 = vload(r_sat);
             x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
             x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
 
-            Vec g07 = vload(g_sat);
+            VFloat g07 = vload(g_sat);
             x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
             x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
 
-            Vec b07 = vload(b_sat);
+            VFloat b07 = vload(b_sat);
             x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
             x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
 
-            Vec w07 = vload(w_sat);
+            VFloat w07 = vload(w_sat);
             w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
             w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
 
         }
         else {
             // Load r_sat in two registers:
-            Vec rLo = vload(r_sat); Vec rHi = vload(r_sat + 8);
-            Vec gLo = vload(g_sat); Vec gHi = vload(g_sat + 8);
-            Vec bLo = vload(b_sat); Vec bHi = vload(b_sat + 8);
-            Vec wLo = vload(w_sat); Vec wHi = vload(w_sat + 8);
+            VFloat rLo = vload(r_sat); VFloat rHi = vload(r_sat + 8);
+            VFloat gLo = vload(g_sat); VFloat gHi = vload(g_sat + 8);
+            VFloat bLo = vload(b_sat); VFloat bHi = vload(b_sat + 8);
+            VFloat wLo = vload(w_sat); VFloat wHi = vload(w_sat + 8);
 
             auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
             auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
@@ -2267,20 +1593,20 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
         }
 #endif
 
-        Vec w2 = vbroadcast(m_wsum) - w1;
+        VFloat w2 = vbroadcast(m_wsum) - w1;
         x1 = x1 - x0;
         w1 = w1 - w0;
 
-        Vec alphabeta_sum = w1 * vbroadcast(0.25f);
-        Vec alpha2_sum = w0 + alphabeta_sum;
-        Vec beta2_sum = w2 + alphabeta_sum;
-        Vec factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+        VFloat alphabeta_sum = w1 * vbroadcast(0.25f);
+        VFloat alpha2_sum = w0 + alphabeta_sum;
+        VFloat beta2_sum = w2 + alphabeta_sum;
+        VFloat factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
 
-        Vector3_Vec alphax_sum = x0 + x1 * vbroadcast(0.5f);
-        Vector3_Vec betax_sum = vbroadcast(m_xsum) - alphax_sum;
+        VVector3 alphax_sum = x0 + x1 * vbroadcast(0.5f);
+        VVector3 betax_sum = vbroadcast(m_xsum) - alphax_sum;
 
-        Vector3_Vec a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
-        Vector3_Vec b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+        VVector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
+        VVector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
 
         // clamp to the grid
         a = vsaturate(a);
@@ -2289,11 +1615,11 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
         b = vround_ept(b);
 
         // compute the error
-        Vector3_Vec e1 = vmad(a * a, alpha2_sum, vmad(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * vbroadcast(2.0f)));
+        VVector3 e1 = vmad(a * a, alpha2_sum, vmad(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * vbroadcast(2.0f)));
 
         // apply the metric to the error term
-        //Vec error = vdot(e1, vbroadcast(m_metricSqr));
-        Vec error = e1.x + e1.y + e1.z;//(e1, vbroadcast(m_metricSqr));
+        //VFloat error = vdot(e1, vbroadcast(m_metricSqr));
+        VFloat error = e1.x + e1.y + e1.z;//(e1, vbroadcast(m_metricSqr));
 
         // keep the solution if it wins
         auto mask = (error < vbesterror);
@@ -2321,7 +1647,7 @@ void ClusterFit::compress3(Vector3 * start, Vector3 * end)
     bestend.y = lane(vbestend.y, bestindex);
     bestend.z = lane(vbestend.z, bestindex);
 
-#else // ICBC_USE_VEC
+#else // ICBC_USE_SPMD
 
     Vector3 x0 = { 0.0f };
     float w0 = 0.0f;
@@ -2398,7 +1724,7 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
     Vector3 beststart = { 0.0f };
     Vector3 bestend = { 0.0f };
 
-#if ICBC_USE_VEC
+#if ICBC_USE_SPMD
 
     // @@ Use the same SAT for both methods.
     // This could be done in set colors and shared for both compress3 and compress4.
@@ -2440,17 +1766,17 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
     }
 #endif
 
-    Vec vbesterror = vbroadcast(FLT_MAX);
-    Vector3_Vec vbeststart = { vzero(), vzero(), vzero() };
-    Vector3_Vec vbestend = { vzero(), vzero(), vzero() };
+    VFloat vbesterror = vbroadcast(FLT_MAX);
+    VVector3 vbeststart = { vzero(), vzero(), vzero() };
+    VVector3 vbestend = { vzero(), vzero(), vzero() };
 
     // check all possible clusters for this total order
     const int total_order_count = s_fourClusterTotal[count - 1];
 
     for (int i = 0; i < total_order_count; i += VEC_SIZE)
     {
-        Vector3_Vec x0, x1, x2;
-        Vec w0, w1, w2;
+        VVector3 x0, x1, x2;
+        VFloat w0, w1, w2;
 
         /*
         // Another approach would be to load and broadcast one color at a time like we do in CUDA.
@@ -2477,10 +1803,10 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         auto loadmask = lane_id() < vbroadcast(float(count));
 
         // Load sat in one register:
-        Vec vrsat = vload(loadmask, r_sat, FLT_MAX);
-        Vec vgsat = vload(loadmask, g_sat, FLT_MAX);
-        Vec vbsat = vload(loadmask, b_sat, FLT_MAX);
-        Vec vwsat = vload(loadmask, w_sat, FLT_MAX);
+        VFloat vrsat = vload(loadmask, r_sat, FLT_MAX);
+        VFloat vgsat = vload(loadmask, g_sat, FLT_MAX);
+        VFloat vbsat = vload(loadmask, b_sat, FLT_MAX);
+        VFloat vwsat = vload(loadmask, w_sat, FLT_MAX);
 
         // Load 4 uint8 per lane.
         __m512i packedClusterIndex = _mm512_load_si512((__m512i *)&s_fourCluster[i]);
@@ -2522,10 +1848,10 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
 
         if (count <= 8) {
             // Load r_sat in one register:
-            Vec r07 = vload(r_sat);
-            Vec g07 = vload(g_sat);
-            Vec b07 = vload(b_sat);
-            Vec w07 = vload(w_sat);
+            VFloat r07 = vload(r_sat);
+            VFloat g07 = vload(g_sat);
+            VFloat b07 = vload(b_sat);
+            VFloat w07 = vload(w_sat);
 
             // Load index and decrement.
             auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
@@ -2558,10 +1884,10 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         }
         else {
             // Load r_sat in two registers:
-            Vec rLo = vload(r_sat); Vec rHi = vload(r_sat + 8);
-            Vec gLo = vload(g_sat); Vec gHi = vload(g_sat + 8);
-            Vec bLo = vload(b_sat); Vec bHi = vload(b_sat + 8);
-            Vec wLo = vload(w_sat); Vec wHi = vload(w_sat + 8);
+            VFloat rLo = vload(r_sat); VFloat rHi = vload(r_sat + 8);
+            VFloat gLo = vload(g_sat); VFloat gHi = vload(g_sat + 8);
+            VFloat bLo = vload(b_sat); VFloat bHi = vload(b_sat + 8);
+            VFloat wLo = vload(w_sat); VFloat wHi = vload(w_sat + 8);
 
             auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
             auto c0LoMask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
@@ -2634,22 +1960,22 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
             c2 = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
 
             // if upper bit set, zero, otherwise load sat entry.
-            Vec r07 = vload(r_sat);
+            VFloat r07 = vload(r_sat);
             x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
             x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
             x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
 
-            Vec g07 = vload(g_sat);
+            VFloat g07 = vload(g_sat);
             x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
             x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
             x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
 
-            Vec b07 = vload(b_sat);
+            VFloat b07 = vload(b_sat);
             x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
             x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
             x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
 
-            Vec w07 = vload(w_sat);
+            VFloat w07 = vload(w_sat);
             w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
             w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
             w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
@@ -2670,42 +1996,42 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
             auto c2Hi = _mm256_sub_epi32(c2, _mm256_set1_epi32(9));
 
             // if upper bit set, zero, otherwise load sat entry.
-            Vec rLo = vload(r_sat);
+            VFloat rLo = vload(r_sat);
             x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
             x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
             x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
 
-            Vec rHi = vload(r_sat + 8);
+            VFloat rHi = vload(r_sat + 8);
             x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c0Hi), x0.x, _mm256_castsi256_ps(c0Hi));
             x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c1Hi), x1.x, _mm256_castsi256_ps(c1Hi));
             x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c2Hi), x2.x, _mm256_castsi256_ps(c2Hi));
 
-            Vec gLo = vload(g_sat);
+            VFloat gLo = vload(g_sat);
             x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
             x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
             x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
 
-            Vec gHi = vload(g_sat + 8);
+            VFloat gHi = vload(g_sat + 8);
             x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c0Hi), x0.y, _mm256_castsi256_ps(c0Hi));
             x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c1Hi), x1.y, _mm256_castsi256_ps(c1Hi));
             x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c2Hi), x2.y, _mm256_castsi256_ps(c2Hi));
 
-            Vec bLo = vload(b_sat);
+            VFloat bLo = vload(b_sat);
             x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
             x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
             x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
 
-            Vec bHi = vload(b_sat + 8);
+            VFloat bHi = vload(b_sat + 8);
             x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c0Hi), x0.z, _mm256_castsi256_ps(c0Hi));
             x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c1Hi), x1.z, _mm256_castsi256_ps(c1Hi));
             x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c2Hi), x2.z, _mm256_castsi256_ps(c2Hi));
 
-            Vec wLo = vload(w_sat);
+            VFloat wLo = vload(w_sat);
             w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
             w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
             w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
 
-            Vec wHi = vload(w_sat + 8);
+            VFloat wHi = vload(w_sat + 8);
             w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c0Hi), w0, _mm256_castsi256_ps(c0Hi));
             w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
             w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c2Hi), w2, _mm256_castsi256_ps(c2Hi));
@@ -2804,23 +2130,23 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         }
 #endif
 
-        Vec w3 = vbroadcast(m_wsum) - w2;
+        VFloat w3 = vbroadcast(m_wsum) - w2;
         x2 = x2 - x1;
         x1 = x1 - x0;
         w2 = w2 - w1;
         w1 = w1 - w0;
 
-        Vec alpha2_sum = vmad(w2, vbroadcast(1.0f / 9.0f), vmad(w1, vbroadcast(4.0f / 9.0f), w0));
-        Vec beta2_sum  = vmad(w1, vbroadcast(1.0f / 9.0f), vmad(w2, vbroadcast(4.0f / 9.0f), w3));
+        VFloat alpha2_sum = vmad(w2, vbroadcast(1.0f / 9.0f), vmad(w1, vbroadcast(4.0f / 9.0f), w0));
+        VFloat beta2_sum  = vmad(w1, vbroadcast(1.0f / 9.0f), vmad(w2, vbroadcast(4.0f / 9.0f), w3));
 
-        Vec alphabeta_sum = (w1 + w2) * vbroadcast(2.0f / 9.0f);
-        Vec factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+        VFloat alphabeta_sum = (w1 + w2) * vbroadcast(2.0f / 9.0f);
+        VFloat factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
 
-        Vector3_Vec alphax_sum = vmad(x2, vbroadcast(1.0f / 3.0f), vmad(x1, vbroadcast(2.0f / 3.0f), x0));
-        Vector3_Vec betax_sum = vbroadcast(m_xsum) - alphax_sum;
+        VVector3 alphax_sum = vmad(x2, vbroadcast(1.0f / 3.0f), vmad(x1, vbroadcast(2.0f / 3.0f), x0));
+        VVector3 betax_sum = vbroadcast(m_xsum) - alphax_sum;
 
-        Vector3_Vec a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
-        Vector3_Vec b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+        VVector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
+        VVector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
 
         // clamp to the grid
         a = vsaturate(a);
@@ -2829,10 +2155,10 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         b = vround_ept(b);
 
         // compute the error
-        Vector3_Vec e1 = vmad(a * a, alpha2_sum, vmad(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * vbroadcast(2.0f)));
+        VVector3 e1 = vmad(a * a, alpha2_sum, vmad(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * vbroadcast(2.0f)));
 
         // apply the metric to the error term
-        Vec error = vdot(e1, vbroadcast(m_metricSqr));
+        VFloat error = vdot(e1, vbroadcast(m_metricSqr));
 
         // keep the solution if it wins
         auto mask = (error < vbesterror);
@@ -2860,7 +2186,7 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
     bestend.y = lane(vbestend.y, bestindex);
     bestend.z = lane(vbestend.z, bestindex);
 
-#elif !ICBC_USE_SAT // ICBC_USE_VEC
+#elif !ICBC_USE_SAT // ICBC_USE_SPMD
 
     Vector3 x0 = { 0.0f };
     float w0 = 0.0f;
@@ -3061,7 +2387,7 @@ void ClusterFit::compress4(Vector3 * start, Vector3 * end)
         bestend = mask ? b : bestend;
     }
 
-#endif // ICBC_USE_VEC
+#endif // ICBC_USE_SPMD
 
     *start = beststart;
     *end = bestend;
@@ -3284,7 +2610,6 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
     *end = bestend;
 }
 #endif // ICBC_FAST_CLUSTER_FIT
-#endif // ICBC_USE_SSE
 
 
 
@@ -4489,14 +3814,17 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 
 // Do not polute preprocessor definitions.
 #undef ICBC_DECODER
-#undef ICBC_USE_SIMD
-#undef ICBC_USE_VEC
+#undef ICBC_USE_SPMD
 #undef ICBC_ASSERT
 
 #endif // ICBC_IMPLEMENTATION
 
+// Version History:
+// v1.00 - Initial release.
+// v1.01 - Added SPMD code path with AVX support.
+// v1.02 - Removed SIMD code path.
+
 // Copyright (c) 2020 Ignacio Castano <castano@gmail.com>
-// Copyright (c) 2006 Simon Brown <si@sjbrown.co.uk>
 //
 // Permission is hereby granted, free of charge, to any person obtaining
 // a copy of this software and associated documentation files (the
