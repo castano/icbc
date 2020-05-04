@@ -8,13 +8,14 @@
 #include "stb_image.h"
 
 #include <stdio.h>
-
+#include <stdint.h>
 
 ////////////////////////////////
 // Basic types
 
 typedef unsigned char u8;
 typedef unsigned int u32;
+typedef uint64_t u64;
 
 
 ////////////////////////////////
@@ -44,6 +45,83 @@ class ExitScopeHelp {
 #define defer const auto& __attribute__((unused)) CONCAT(defer__, __LINE__) = ExitScopeHelp() + [&]()
 #endif
 
+
+
+////////////////////////////////
+// Timer
+
+// Based of https://gist.github.com/pervognsen/496d659251ad2af200dde4c773bd565f
+#if _WIN32
+struct Timer {
+    LARGE_INTEGER win32_freq;
+    LARGE_INTEGER win32_start;
+
+    Timer() {
+        QueryPerformanceFrequency(&win32_freq);
+        win32_start.QuadPart = 0;
+    }
+
+    void start() {
+        QueryPerformanceCounter(&win32_start);
+    }
+    
+    double secs() {
+        if (win32_start.QuadPart == 0) return 0.0;
+        LARGE_INTEGER win32_now;
+        QueryPerformanceCounter(&win32_now);
+        return double(win32_now.QuadPart - win32_start.QuadPart) / double(win32_freq.QuadPart);
+    }
+
+    double stop() {
+        double t = secs();
+        win32_start.QuadPart = 0;
+        return t;
+    }
+};
+#else
+#include <mach/mach_time.h>
+
+struct Timer {
+    mach_timebase_info_data_t mach_timebase;
+    u64 mach_start;
+
+    Timer() {
+        mach_timebase_info(&mach_timebase);
+        mach_start = 0;
+    }
+
+    void start() {
+        mach_start = mach_absolute_time();
+    }
+    
+    double secs() {
+        if (mach_start == 0) return 0.0;
+        u64 mach_now = mach_absolute_time();
+        return (mach_now - mach_start) / (double(mach_timebase.denom) * 1e9);
+    }
+
+    double stop() {
+        double t = secs();
+        mach_start = 0;
+        return t;
+    }
+};
+#endif
+
+struct TimeEstimate {
+    int num = 0;        // number of samples
+    double unit = 1.0;  // units per second
+    double min = 0.0;   // min sample
+    double max = 0.0;   // max sample
+    double avg = 0.0;   // average sample
+
+    void add(double sample) {
+        num++;
+        min = (num == 1 || sample < min) ? sample : min;
+        max = (num == 1 || sample > max) ? sample : max;
+        avg += (sample - avg) / num;
+    }
+};
 
 ////////////////////////////////
 // DXT
@@ -125,6 +203,11 @@ static float mse_to_psnr(float mse) {
     return psnr;
 }
 
+int total_block_count = 0;
+double total_avg_time = 0;
+double total_min_time = 0;
+double total_mse = 0;
+
 bool encode_image(const char * input_filename) {
 
     int w, h, n;
@@ -173,10 +256,11 @@ bool encode_image(const char * input_filename) {
 
     printf("Encoding '%s':", input_filename);
 
-    //Timer timer;
-    //timer.start();
+    TimeEstimate estimate;
+    Timer timer;
     for (int i = 0; i < repeat_count; i++) {
 
+        timer.start();
         for (int b = 0; b < block_count; b++) {
             float input_colors[16 * 4];
             float input_weights[16];
@@ -190,14 +274,22 @@ bool encode_image(const char * input_filename) {
 
             icbc::compress_dxt1(input_colors, input_weights, color_weights, /*three_color_mode=*/true, /*hq=*/false, (block_data + b * 8));
         }
-
+        estimate.add(timer.stop());
     }
-    //timer.stop();
 
     float mse = evaluate_dxt1_mse(rgba_block_data, block_data, block_count);
-    //output_dxt_dds(bw, bh, block_data, "icbc_test.dds");
 
-    printf("\tRMSE = %.3f\tPSNR = %.3f\tTIME = ?\n", sqrtf(mse), mse_to_psnr(mse) );
+    char output_filename[1024];
+    snprintf(output_filename, 1024, "%.*s_bc1.dds", int(strchr(input_filename, '.')-input_filename), input_filename);
+    output_dxt_dds(bw, bh, block_data, output_filename);
+
+    total_block_count += block_count;
+    total_avg_time += estimate.avg;
+    total_min_time += estimate.min;
+    total_mse += mse * block_count;
+
+    printf("\tRMSE = %.3f\tPSNR = %.3f\tTIME = %f (%f)\n", sqrtf(mse), mse_to_psnr(mse), estimate.avg, estimate.min);
+
 
     return true;
 }
@@ -239,6 +331,11 @@ int main(int argc, char * arcv[]) {
     for (int i = 0; i < image_count; i++) {
         encode_image(images[i]);
     }
+
+    total_mse /= total_block_count;
+
+    printf("Average Results:\n");
+    printf("\tRMSE = %.3f\tPSNR = %.3f\tTIME = %f (%f)\n", sqrtf(total_mse), mse_to_psnr(total_mse), total_avg_time, total_min_time);
 
     return 0;
 }
