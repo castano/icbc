@@ -93,6 +93,7 @@ namespace icbc {
 #define ICBC_SAT_INC 1
 
 #include <stdint.h>
+#include <stdlib.h> // abs
 #include <string.h> // memset
 #include <math.h>   // floorf
 #include <float.h>  // FLT_MAX
@@ -479,8 +480,29 @@ ICBC_FORCEINLINE bool any(VMask m) { return m; }
 
 #define VEC_SIZE 4
 
+#if __GNUC__
+union Vec {
+    __m128 v;
+    float m128_f32[VEC_SIZE];
+
+    Vec() {}
+    Vec(__m128 v) : v(v) {}
+    operator __m128 & () { return v; }
+    //operator __m128 () const { return v; }
+};
+union VMask {
+    __m128 m;
+
+    VMask() {}
+    VMask(__m128 m) : m(m) {}
+    operator __m128 & () { return m; }
+    //operator __m128 () const { return v; }
+};
+
+#else
 using Vec = __m128;
 using VMask = __m128;
+#endif
 
 ICBC_FORCEINLINE float & lane(Vec & v, int i) {
     return v.m128_f32[i];
@@ -491,7 +513,7 @@ ICBC_FORCEINLINE Vec vzero() {
 }
 
 ICBC_FORCEINLINE Vec vbroadcast(float x) {
-    return _mm_broadcast_ss(&x);
+    return _mm_set1_ps(x);
 }
 
 ICBC_FORCEINLINE Vec vload(float * ptr) {
@@ -543,10 +565,10 @@ ICBC_FORCEINLINE Vec lane_id() {
     return _mm_set_ps(3, 2, 1, 0);
 }
 
-ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GT_OQ); }
-ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_GE_OQ); }
-ICBC_FORCEINLINE VMask operator< (Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_LT_OQ); }
-ICBC_FORCEINLINE VMask operator<=(Vec A, Vec B) { return _mm_cmp_ps(A, B, _CMP_LE_OQ); }
+ICBC_FORCEINLINE VMask operator> (Vec A, Vec B) { return _mm_cmpgt_ps(A, B); }
+ICBC_FORCEINLINE VMask operator>=(Vec A, Vec B) { return _mm_cmpge_ps(A, B); }
+ICBC_FORCEINLINE VMask operator< (Vec A, Vec B) { return _mm_cmplt_ps(A, B); }
+ICBC_FORCEINLINE VMask operator<=(Vec A, Vec B) { return _mm_cmple_ps(A, B); }
 
 ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return _mm_or_ps(A, B); }
 ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return _mm_and_ps(A, B); }
