@@ -278,7 +278,7 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 #endif
 
 #if __GNUC__
-#define ICBC_FORCEINLINE inline
+#define ICBC_FORCEINLINE inline __attribute__((always_inline))
 #else
 #define ICBC_FORCEINLINE __forceinline
 #endif
@@ -423,8 +423,26 @@ ICBC_FORCEINLINE bool any(VMask m) {
 
 #define VEC_SIZE 8
 
+#if __GNUC__
+union VFloat {
+    __m256 v;
+    float m256_f32[VEC_SIZE];
+
+    VFloat() {}
+    VFloat(__m256 v) : v(v) {}
+    operator __m256 & () { return v; }
+};
+union VMask {
+    __m256 m;
+
+    VMask() {}
+    VMask(__m256 m) : m(m) {}
+    operator __m256 & () { return m; }
+};
+#else
 using VFloat = __m256;
 using VMask = __m256;   // Emulate mask vector using packed float.
+#endif
 
 ICBC_FORCEINLINE float & lane(VFloat & v, int i) {
     return v.m256_f32[i];
@@ -515,7 +533,18 @@ ICBC_FORCEINLINE bool any(VMask m) {
 
 #define VEC_SIZE 16
 
+#if __GNUC__
+union VFloat {
+    __m512 v;
+    float m512_f32[VEC_SIZE];
+
+    VFloat() {}
+    VFloat(__m512 v) : v(v) {}
+    operator __m512 & () { return v; }
+};
+#else
 using VFloat = __m512;
+#endif
 struct VMask { __mmask16 m; };
 
 ICBC_FORCEINLINE float & lane(VFloat & v, int i) {
