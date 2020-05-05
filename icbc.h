@@ -3259,7 +3259,6 @@ static float compress_dxt1_single_color(const Vector3 * colors, const float * we
 static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, BlockDXT1 * output)
 {
     ClusterFit fit;
-    fit.setColorSet(input_colors, color_weights);
 #if ICBC_FAST_CLUSTER_FIT
     if (count > 15) fit.setColorSet(input_colors, color_weights);
     else
