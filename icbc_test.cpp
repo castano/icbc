@@ -1,8 +1,8 @@
 
-#define ICBC_USE_SPMD 2         // SSE2
-//#define ICBC_USE_SPMD 3         // SSE4.1
-//#define ICBC_USE_SPMD 5         // AVX2
-//#define ICBC_USE_SPMD 6         // AVX512
+//#define ICBC_USE_SPMD 1         // SSE2
+//#define ICBC_USE_SPMD 2         // SSE4.1
+#define ICBC_USE_SPMD 4         // AVX2
+//#define ICBC_USE_SPMD 5         // AVX512
 #define ICBC_IMPLEMENTATION
 #include "icbc.h"
 
@@ -252,7 +252,8 @@ bool encode_image(const char * input_filename) {
         }
     }
 
-    const float color_weights[3] = {1,1,1};
+    //const float color_weights[3] = {3, 4, 2}; // This is probably better for color images.
+    const float color_weights[3] = {1, 1, 1};
 
     u8 * block_data = (u8 *)malloc(block_count * 8);
 
