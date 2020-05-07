@@ -1,3 +1,7 @@
+// Compilation instructions:
+// $ g++ icbc_test.cpp -O3 -mavx2 -fopenmp
+// > cl icbc_test.cpp /O2 /arch:AVX2 /openmp
+
 
 //#define ICBC_USE_SPMD 1         // SSE2
 //#define ICBC_USE_SPMD 2         // SSE4.1
@@ -32,12 +36,11 @@ struct ExitScope {
     T lambda;
     ExitScope(T lambda):lambda(lambda){}
     ~ExitScope(){lambda();}
-  private:
+private:
     ExitScope& operator=(const ExitScope&);
 };
 
-class ExitScopeHelp {
-  public:
+struct ExitScopeHelp {
     template<typename T>
         ExitScope<T> operator+(T t){ return t;}
 };
@@ -131,7 +134,7 @@ struct TimeEstimate {
 // DXT
 
 // Returns mse.
-float evaluate_dxt1_mse(u8 * rgba, u8 * block, int block_count, icbc::Decoder decoder = icbc::Decoder_D3D10) {
+static float evaluate_dxt1_mse(u8 * rgba, u8 * block, int block_count, icbc::Decoder decoder = icbc::Decoder_D3D10) {
     double total = 0.0f;
     for (int b = 0; b < block_count; b++) {
         total += icbc::evaluate_dxt1_error(rgba, block, decoder);
@@ -143,7 +146,7 @@ float evaluate_dxt1_mse(u8 * rgba, u8 * block, int block_count, icbc::Decoder de
 
 #define IC_MAKEFOURCC(str) (u32(str[0]) | (u32(str[1]) << 8) | (u32(str[2]) << 16) | (u32(str[3]) << 24 ))
 
-bool output_dxt_dds (u32 w, u32 h, const u8* data, const char * filename) {
+static bool output_dxt_dds(u32 w, u32 h, const u8* data, const char * filename) {
 
     const u32 DDSD_CAPS = 0x00000001;
     const u32 DDSD_PIXELFORMAT = 0x00001000;
@@ -157,29 +160,29 @@ bool output_dxt_dds (u32 w, u32 h, const u8* data, const char * filename) {
         u32 fourcc = IC_MAKEFOURCC("DDS ");
         u32 size = 124;
         u32 flags = DDSD_CAPS|DDSD_PIXELFORMAT|DDSD_WIDTH|DDSD_HEIGHT|DDSD_LINEARSIZE;
-        u32 height;
-        u32 width;
-        u32 pitch;
-        u32 depth;
-        u32 mipmapcount;
+        u32 height = 0;
+        u32 width = 0;
+        u32 pitch = 0;
+        u32 depth = 0;
+        u32 mipmapcount = 1;
         u32 reserved [11];
         struct {
             u32 size = 32;
             u32 flags = DDPF_FOURCC;
             u32 fourcc = IC_MAKEFOURCC("DXT1");
-            u32 bitcount;
-            u32 rmask;
-            u32 gmask;
-            u32 bmask;
-            u32 amask;
+            u32 bitcount = 0;
+            u32 rmask = 0;
+            u32 gmask = 0;
+            u32 bmask = 0;
+            u32 amask = 0;
         } pf;
         struct {
             u32 caps1 = DDSCAPS_TEXTURE;
-            u32 caps2;
-            u32 caps3;
-            u32 caps4;
+            u32 caps2 = 0;
+            u32 caps3 = 0;
+            u32 caps4 = 0;
         } caps;
-        u32 notused;
+        u32 notused = 0;
     } dds;
     static_assert(sizeof(DDS) == 128, "DDS size must be 128");
 
@@ -201,12 +204,70 @@ bool output_dxt_dds (u32 w, u32 h, const u8* data, const char * filename) {
     return true;
 }
 
+static bool output_dxt_ktx(u32 w, u32 h, const u8* data, const char * filename) {
+
+    const u32 GL_COMPRESSED_RGB_S3TC_DXT1_EXT = 0x83F0;
+    const u32 GL_RGBA = 0x1908;
+
+    struct KTX {
+        // '«', 'K', 'T', 'X', ' ', '2', '0', '»', '\r', '\n', '\x1A', '\n'
+        u8 identifier[12] = { 0xAB, 0x4B, 0x54, 0x58, 0x20, 0x31, 0x31, 0xBB, 0x0D, 0x0A, 0x1A, 0x0A};
+        u32 endianness = 0x04030201;
+        u32 glType = 0;
+        u32 glTypeSize = 0;
+        u32 glFormat = 0;
+        u32 glInternalFormat = 0;
+        u32 glBaseInternalFormat = 0;
+        u32 pixelWidth = 0;
+        u32 pixelHeight = 0;
+        u32 pixelDepth = 0;
+        u32 numberOfArrayElements = 0;
+        u32 numberOfFaces = 0;
+        u32 numberOfMipmapLevels = 0;
+        u32 bytesOfKeyValueData = 0;
+    } ktx;
+
+    ktx.glTypeSize = 1;
+    ktx.glInternalFormat = GL_COMPRESSED_RGB_S3TC_DXT1_EXT;
+    ktx.glBaseInternalFormat = GL_RGBA;
+    ktx.pixelWidth = w;
+    ktx.pixelHeight = h;
+    ktx.numberOfMipmapLevels = 1;
+
+    u32 image_size = 8 * ((w+3)/4 * (h+3)/4);
+
+    FILE * fp = fopen(filename, "wb");
+    if (fp == nullptr) return false;
+
+    // Write header:
+    fwrite(&ktx, sizeof(ktx), 1, fp);
+    fwrite(&image_size, sizeof(u32), 1, fp);
+
+    // Write dxt data:
+    fwrite(data, image_size, 1, fp);
+
+    fclose(fp);
+
+    return true;
+}
+
+
+
+
+
 static float mse_to_psnr(float mse) {
     float rms = sqrtf(mse);
     float psnr = rms ? (float)icbc::clamp(log10(255.0 / rms) * 20.0, 0.0, 300.0) : 1e+10f;
     return psnr;
 }
 
+
+// Input options:
+bool output_dds = false;
+bool output_ktx = false;
+int repeat_count = 1;
+
+// Output stats:
 int total_block_count = 0;
 double total_avg_time = 0;
 double total_min_time = 0;
@@ -257,8 +318,6 @@ bool encode_image(const char * input_filename) {
 
     u8 * block_data = (u8 *)malloc(block_count * 8);
 
-    int repeat_count = 1;
-
     printf("Encoding '%s':", input_filename);
 
     TimeEstimate estimate;
@@ -266,6 +325,8 @@ bool encode_image(const char * input_filename) {
     for (int i = 0; i < repeat_count; i++) {
 
         timer.start();
+
+        #pragma omp parallel for
         for (int b = 0; b < block_count; b++) {
             float input_colors[16 * 4];
             float input_weights[16];
@@ -285,8 +346,14 @@ bool encode_image(const char * input_filename) {
     float mse = evaluate_dxt1_mse(rgba_block_data, block_data, block_count);
 
     char output_filename[1024];
-    snprintf(output_filename, 1024, "%.*s_bc1.dds", int(strchr(input_filename, '.')-input_filename), input_filename);
-    output_dxt_dds(bw, bh, block_data, output_filename);
+    if (output_dds) {
+        snprintf(output_filename, 1024, "%.*s_bc1.dds", int(strchr(input_filename, '.')-input_filename), input_filename);
+        output_dxt_dds(bw, bh, block_data, output_filename);
+    }
+    if (output_ktx) {
+        snprintf(output_filename, 1024, "%.*s_bc1.ktx", int(strchr(input_filename, '.')-input_filename), input_filename);
+        output_dxt_ktx(bw, bh, block_data, output_filename);
+    }
 
     total_block_count += block_count;
     total_avg_time += estimate.avg;
@@ -329,7 +396,19 @@ const char * images[] = {
 const int image_count = sizeof(images) / sizeof(images[0]);
 
 
-int main(int argc, char * arcv[]) {
+int main(int argc, char * argv[]) {
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "-dds") == 0) {
+            output_dds = true;
+        }
+        else if (strcmp(argv[i], "-ktx") == 0) {
+            output_ktx = true;
+        }
+        else if (atoi(argv[i])) {
+            repeat_count = atoi(argv[i]);
+        }
+    }
 
     icbc::init_dxt1();
 

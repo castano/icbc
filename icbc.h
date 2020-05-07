@@ -36,7 +36,7 @@ namespace icbc {
 #define ICBC_AVX1   3
 #define ICBC_AVX2   4
 #define ICBC_AVX512 5
-#define ICBC_NEON   6
+#define ICBC_NEON   -1
 
 // AVX does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
 //#define ICBC_USE_FMA 3
@@ -77,9 +77,14 @@ namespace icbc {
 #include <immintrin.h>
 #endif
 
-#if ICBC_USE_SPMD >= ICBC_AVX512
+#if ICBC_USE_SPMD >= ICBC_AVX512 && _MSC_VER
 #include <zmmintrin.h>
 #endif
+
+#if ICBC_USE_SPMD == ICBC_NEON
+#include <arm_neon.h>
+#endif
+
 
 // Some testing knobs:
 #define ICBC_FAST_CLUSTER_FIT 0     // This ignores input weights for a moderate speedup. (currently broken)
