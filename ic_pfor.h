@@ -243,7 +243,7 @@ inline uint32 atomic_fetch_and_add(uint32 * value, uint32 value_to_add) {
 ////////////////////////////////////////////////////////
 // System
 
-#if IC_OS_WINDOWS
+#if IC_OS_WINDOWS || IC_OS_CYGWIN
 typedef BOOL (WINAPI *LPFN_GSI)(LPSYSTEM_INFO);
 typedef BOOL (WINAPI *LPFN_ISWOW64PROCESS) (HANDLE, PBOOL);
 
@@ -281,7 +281,7 @@ static void getSystemInfo(SYSTEM_INFO * sysinfo) {
 // Find the number of logical processors in the system.
 // Based on: http://stackoverflow.com/questions/150355/programmatically-find-the-number-of-cores-on-a-machine
 static int get_processor_count() {
-#if IC_OS_WINDOWS
+#if IC_OS_WINDOWS || IC_OS_CYGWIN
     SYSTEM_INFO sysinfo;
     getSystemInfo(&sysinfo);
     return sysinfo.dwNumberOfProcessors;
@@ -328,7 +328,7 @@ static int get_processor_count() {
 
     return numCPU;
 #else
-    return 12; // Assume single core.
+    return 1; // Assume single core.
 #endif
 }
 
