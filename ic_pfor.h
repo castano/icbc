@@ -17,9 +17,9 @@
 
 /*
 #ifdef __clang__
-#define NV_CC_CPP11 (__has_feature(cxx_deleted_functions) && __has_feature(cxx_rvalue_references) && __has_feature(cxx_static_assert))
+#define IC_CC_CPP11 (__has_feature(cxx_deleted_functions) && __has_feature(cxx_rvalue_references) && __has_feature(cxx_static_assert))
 #elif defined __GNUC__ 
-#define NV_CC_CPP11 ( __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 4))
+#define IC_CC_CPP11 ( __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 4))
 #endif
 #endif
 */
@@ -77,14 +77,27 @@ namespace ic {
 
 #define IC_STATIC_ASSERT(x) IC_ASSERT(x)
 
-#define IC_OS_WINDOWS ((defined _WIN32 || defined WIN32 || defined __NT__ || defined __WIN32__) && !defined __CYGWIN__)
-#define IC_OS_LINUX (defined linux || defined __linux__)
-#define IC_OS_NETBSD (defined __NetBSD__)
-#define IC_OS_DARWIN (defined __APPLE__)
-#define IC_OS_FREEBSD (defined __FreeBSD__)
-#define IC_OS_OPENBSD (defined __OpenBSD__)
-#define IC_OS_CYGWIN (defined __CYGWIN__)
-
+#if ((defined(_WIN32) || defined WIN32 || defined __NT__ || defined __WIN32__) && !defined __CYGWIN__)
+#define IC_OS_WINDOWS
+#endif
+#if (defined linux || defined __linux__)
+#define IC_OS_LINUX 1
+#endif
+#if defined(__NetBSD__)
+#define IC_OS_NETBSD 1
+#endif
+#if defined(__APPLE__) || defined (__MACH__)
+#define IC_OS_DARWIN 1
+#endif
+#if defined(__FreeBSD__)
+#define IC_OS_FREEBSD 1
+#endif
+#if defined(__OpenBSD__)
+#define IC_OS_OPENBSD 1
+#endif
+#if defined(__CYGWIN__)
+#define IC_OS_CYGWIN 1
+#endif
 
 #if IC_OS_WINDOWS || IC_OS_CYGWIN
 #define WIN32_LEAN_AND_MEAN
@@ -99,15 +112,13 @@ namespace ic {
 #if !IC_OS_WINDOWS
 #include <pthread.h>
 //#include <sys/types.h>
-//#include <sys/sysctl.h>
 //#include <unistd.h>
 #endif
 
 
-#if NV_OS_DARWIN
+#if IC_OS_DARWIN
 #import <mach/mach_host.h>
 #import <sys/sysctl.h>
-//#include <syslog.h>
 #endif
 
 
@@ -426,6 +437,8 @@ static void * threadFunc(void * arg)
 
 static void thread_start(Thread * thread, ThreadFunc * func, void * arg)
 {
+    thread->func = func;
+    thread->arg = arg;
     int result = pthread_create(&thread->handle, NULL, threadFunc, thread);
     IC_ASSERT(result == 0);
 }
@@ -481,8 +494,8 @@ static void event_wait(Event * event)
 #else // POSIX
 
 struct Event {
-    pthread_cond_t pt_cond = NULL;
-    pthread_mutex_t pt_mutex = NULL;
+    pthread_cond_t pt_cond;
+    pthread_mutex_t pt_mutex;
     int count = 0;
     int wait_count = 0;
 };
@@ -498,9 +511,7 @@ static void event_create(Event * event)
 static void event_destroy(Event * event)
 {
     pthread_cond_destroy(&event->pt_cond);
-    event->pt_cond = NULL;
     pthread_mutex_destroy(&event->pt_mutex);
-    event->pt_mutex = NULL;
 }
 
 static void event_post(Event * event)
