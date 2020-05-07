@@ -1,12 +1,14 @@
 // Compilation instructions:
-// $ g++ icbc_test.cpp -O3 -mavx2 -fopenmp
-// > cl icbc_test.cpp /O2 /arch:AVX2 /openmp
+// $ g++ icbc_test.cpp -O3 -mavx2
+// > cl icbc_test.cpp /O2 /arch:AVX2
 
-
+// Enable one of these:
 //#define ICBC_USE_SPMD 1         // SSE2
 //#define ICBC_USE_SPMD 2         // SSE4.1
+//#define ICBC_USE_SPMD 3         // AVX
 #define ICBC_USE_SPMD 4         // AVX2
 //#define ICBC_USE_SPMD 5         // AVX512
+
 #define ICBC_IMPLEMENTATION
 #include "icbc.h"
 
@@ -14,8 +16,14 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
+#define IC_PFOR_IMPLEMENTATION
+#include "ic_pfor.h"
+
+
+
 #include <stdio.h>
 #include <stdint.h>
+
 
 ////////////////////////////////
 // Basic types
@@ -52,68 +60,59 @@ struct ExitScopeHelp {
 #endif
 
 
-
 ////////////////////////////////
 // Timer
 
 // Based of https://gist.github.com/pervognsen/496d659251ad2af200dde4c773bd565f
 #if defined _WIN32 || __CYGWIN__
 #include <windows.h>
-struct Timer {
-    LARGE_INTEGER win32_freq;
-    LARGE_INTEGER win32_start;
-
-    Timer() {
-        QueryPerformanceFrequency(&win32_freq);
-        win32_start.QuadPart = 0;
-    }
-
-    void start() {
-        QueryPerformanceCounter(&win32_start);
-    }
-    
-    double secs() {
-        if (win32_start.QuadPart == 0) return 0.0;
-        LARGE_INTEGER win32_now;
-        QueryPerformanceCounter(&win32_now);
-        return double(win32_now.QuadPart - win32_start.QuadPart) / double(win32_freq.QuadPart);
-    }
-
-    double stop() {
-        double t = secs();
-        win32_start.QuadPart = 0;
-        return t;
-    }
-};
+inline double timer_frequency() {
+    LARGE_INTEGER qpf;
+    QueryPerformanceFrequency(&qpf);
+    return double(qpf.QuadPart);
+}
+inline u64 timer_time() {
+    LARGE_INTEGER qpc;
+    QueryPerformanceCounter(&qpc);    
+    return qpc.QuadPart;
+}
 #else
 #include <mach/mach_time.h>
+inline double timer_frequency() {
+    mach_timebase_info_data_t mach_timebase;
+    mach_timebase_info(&mach_timebase);
+    return double(mach_timebase.denom) * 1e9;
+}
+inline u64 timer_time() {
+    return mach_absolute_time();
+}
+#endif
 
 struct Timer {
-    mach_timebase_info_data_t mach_timebase;
-    u64 mach_start;
+    double freq;
+    u64 time_start;
 
     Timer() {
-        mach_timebase_info(&mach_timebase);
-        mach_start = 0;
+        freq = timer_frequency();
+        time_start = 0;
     }
 
     void start() {
-        mach_start = mach_absolute_time();
+        time_start = timer_time();
     }
-    
+
     double secs() {
-        if (mach_start == 0) return 0.0;
-        u64 mach_now = mach_absolute_time();
-        return (mach_now - mach_start) / (double(mach_timebase.denom) * 1e9);
+        if (time_start == 0) return 0.0;
+        u64 time_now = timer_time();
+        return (time_now - time_start) / freq;
     }
 
     double stop() {
         double t = secs();
-        mach_start = 0;
+        time_start = 0;
         return t;
     }
 };
-#endif
 
 struct TimeEstimate {
     int num = 0;        // number of samples
@@ -130,19 +129,9 @@ struct TimeEstimate {
     }
 };
 
-////////////////////////////////
-// DXT
 
-// Returns mse.
-static float evaluate_dxt1_mse(u8 * rgba, u8 * block, int block_count, icbc::Decoder decoder = icbc::Decoder_D3D10) {
-    double total = 0.0f;
-    for (int b = 0; b < block_count; b++) {
-        total += icbc::evaluate_dxt1_error(rgba, block, decoder);
-        rgba += 4 * 4 * 4;
-        block += 8;
-    }
-    return float(total / (16 * block_count));
-}
+////////////////////////////////
+// File Output
 
 #define IC_MAKEFOURCC(str) (u32(str[0]) | (u32(str[1]) << 8) | (u32(str[2]) << 16) | (u32(str[3]) << 24 ))
 
@@ -232,6 +221,7 @@ static bool output_dxt_ktx(u32 w, u32 h, const u8* data, const char * filename) 
     ktx.glBaseInternalFormat = GL_RGBA;
     ktx.pixelWidth = w;
     ktx.pixelHeight = h;
+    ktx.numberOfFaces = 1;
     ktx.numberOfMipmapLevels = 1;
 
     u32 image_size = 8 * ((w+3)/4 * (h+3)/4);
@@ -253,6 +243,19 @@ static bool output_dxt_ktx(u32 w, u32 h, const u8* data, const char * filename) 
 
 
 
+////////////////////////////////
+// DXT
+
+// Returns mse.
+static float evaluate_dxt1_mse(u8 * rgba, u8 * block, int block_count, icbc::Decoder decoder = icbc::Decoder_D3D10) {
+    double total = 0.0f;
+    for (int b = 0; b < block_count; b++) {
+        total += icbc::evaluate_dxt1_error(rgba, block, decoder);
+        rgba += 4 * 4 * 4;
+        block += 8;
+    }
+    return float(total / (16 * block_count));
+}
 
 
 static float mse_to_psnr(float mse) {
@@ -326,8 +329,7 @@ bool encode_image(const char * input_filename) {
 
         timer.start();
 
-        #pragma omp parallel for
-        for (int b = 0; b < block_count; b++) {
+        ic::pfor(block_count, 32, [=](int b) {
             float input_colors[16 * 4];
             float input_weights[16];
             for (int j = 0; j < 16; j++) {
@@ -339,7 +341,8 @@ bool encode_image(const char * input_filename) {
             }
 
             icbc::compress_dxt1(input_colors, input_weights, color_weights, /*three_color_mode=*/true, /*hq=*/false, (block_data + b * 8));
-        }
+        });
+
         estimate.add(timer.stop());
     }
 
@@ -367,7 +370,7 @@ bool encode_image(const char * input_filename) {
 }
 
 // Kodak image set from: http://r0k.us/graphics/kodak/
-const char * images[] = {
+static const char * images[] = {
     "data/kodim01.png",
     "data/kodim02.png",
     "data/kodim03.png",
@@ -393,7 +396,7 @@ const char * images[] = {
     "data/kodim23.png",
     "data/kodim24.png",
 };
-const int image_count = sizeof(images) / sizeof(images[0]);
+static const int image_count = sizeof(images) / sizeof(images[0]);
 
 
 int main(int argc, char * argv[]) {
@@ -411,6 +414,8 @@ int main(int argc, char * argv[]) {
     }
 
     icbc::init_dxt1();
+    int thread_count = ic::init_pfor();
+    printf("Using %d threads.\n", thread_count);
 
     for (int i = 0; i < image_count; i++) {
         encode_image(images[i]);
