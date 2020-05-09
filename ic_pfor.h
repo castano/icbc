@@ -7,6 +7,15 @@
 //     ... // This will be invoked 256 times with i from 0 to 255.
 // });
 //
+// Or using the macro syntax:
+//
+// ic_pfor(i, count, step) { ... }
+//
+// If you want to avoid lambdas you can also use function callbacks:
+//
+// void my_for_task(void * context, int idx) { ... }
+// ic::pfor_run(my_for_task, context, count, step);
+//
 // You can define IC_THREAD_NAME to invoke your own thread naming function, for example, for
 // telemetry:
 //
