@@ -1,44 +1,9 @@
 // ic_pfor v1.0 - Ignacio Castano <castano@gmail.com>
-// LICENSE: MIT License at the end of this file.
-//
-// USAGE:
-//
-// ic::pfor(256, [&](int i){
-//     ... // This will be invoked 256 times with i from 0 to 255.
-// });
-//
-// Or using the macro syntax:
-//
-// ic_pfor(i, count, step) { ... }
-//
-// If you want to avoid lambdas you can also use function callbacks:
-//
-// void my_for_task(void * context, int idx) { ... }
-// ic::pfor_run(my_for_task, context, count, step);
-//
-// You can define IC_THREAD_NAME to invoke your own thread naming function, for example, for
-// telemetry:
-//
-// #define IC_THREAD_NAME(id, name) tmThreadName(0, id, name);
-//
-// To create threads that can use the CRT safely on windows, define:
-//
-// #define IC_INIT_THREAD_CRT 1
-//
-// Maximum thread count is limited to 32, to set a higher (or lower) limit use:
-//
-// #define IC_MAX_THREAD_COUNT 32
-//
-// I haven't really tested this library with more than 16 threads.
-//
-// To change the size of the allocated stacks:
-//
-// #define IC_THREAD_STACK_SIZE 0
-//
-// 0 means default.
+// LICENSE: 
+//  MIT License at the end of this file.
 
-
-#pragma once
+#ifndef IC_PFOR_H
+#define IC_PFOR_H
 
 // Allow disabling C++11 lambdas.
 #ifndef IC_CC_LAMBDAS
@@ -60,6 +25,8 @@ namespace ic {
     void pfor_run (ForTask * task, void * context, unsigned int count, unsigned int step = 1);
 
 #if IC_CC_LAMBDAS
+    // The lambda based body declaration is much nicer:
+    // ic::pfor(count, step, [&](int i){ ... });
     template <typename F>
     void pfor(unsigned int count, unsigned int step, F f) {
         // Transform lambda into function pointer.
@@ -71,7 +38,8 @@ namespace ic {
         pfor_run(lambda, &f, count, step);
     }
 
-    // Some shenanigas for a slightly better syntax.
+    // Some shenanigas for a slightly better syntax:
+    // ic_pfor(idx, count, step) { ... }
     template<typename F> 
     struct PForRun {
         F f;
@@ -97,9 +65,11 @@ namespace ic {
 
 } // ic
 
+#endif // IC_PFOR_H
 
 #ifdef IC_PFOR_IMPLEMENTATION
 
+// Maximum thread count is fixed, but can be tweaked with this definition:
 #ifndef IC_MAX_THREAD_COUNT
 #define IC_MAX_THREAD_COUNT 32
 #endif 
@@ -108,6 +78,7 @@ namespace ic {
 #define IC_THREAD_STACK_SIZE 0 // Use default size.
 #endif
 
+// Set this to 1 to use the Windows CRT safely inside the threads.
 #ifndef IC_INIT_THREAD_CRT
 #define IC_INIT_THREAD_CRT 0
 #endif
@@ -117,7 +88,7 @@ namespace ic {
 #include <assert.h>
 #endif
 
-#define IC_STATIC_ASSERT(x) IC_ASSERT(x)
+#define IC_STATIC_ASSERT(x) static_assert(x, #x)
 
 #if ((defined(_WIN32) || defined WIN32 || defined __NT__ || defined __WIN32__) && !defined __CYGWIN__)
 #define IC_OS_WINDOWS
@@ -157,13 +128,10 @@ namespace ic {
 //#include <unistd.h>
 #endif
 
-
 #if IC_OS_DARWIN
 #import <mach/mach_host.h>
 #import <sys/sysctl.h>
 #endif
-
-
 
 #include <stdint.h>
 #include <stdio.h> // snprintf
@@ -214,30 +182,6 @@ inline T min(const T & a, const T & b)
 #define compiler_write_barrier      compiler_rw_barrier
 
 #endif
-
-
-inline uint32 load_relaxed(const uint32 * ptr) { return *ptr; }
-
-inline void store_relaxed(uint32 * ptr, uint32 value) { *ptr = value; }
-
-inline void store_release(volatile uint32 * ptr, uint32 value) {
-    IC_ASSERT((intptr_t(ptr) & 3) == 0);
-    IC_STATIC_ASSERT((intptr_t(&value) & 3) == 0);
-
-    compiler_write_barrier();
-    *ptr = value;   // on x86, stores are Release
-}
-
-inline uint32 load_acquire(const volatile uint32 * ptr) {
-    IC_ASSERT((intptr_t(ptr) & 3) == 0);
-
-    uint32 ret = *ptr;  // on x86, loads are Acquire
-    compiler_read_barrier();
-
-    IC_STATIC_ASSERT((intptr_t(&ret) & 3) == 0);
-
-    return ret;
-}
 
 template <typename T>
 inline void store_release_pointer(volatile T * pTo, T from) {
@@ -502,7 +446,6 @@ static void thread_wait(Thread threads[], uint count)
 }
 
 
-
 ////////////////////////////////////////////////////////
 // Event
 
@@ -562,7 +505,6 @@ static void event_post(Event * event)
 
     event->count += 1;
     
-    //ACS: move this after the unlock?
     if (event->wait_count > 0) {
         pthread_cond_signal(&event->pt_cond);
     }
@@ -601,7 +543,8 @@ static void event_wait(Event threads[], uint count)
 }
 
 
-
+////////////////////////////////////////////////////////
+// Thread Pool
 
 typedef void ThreadTask(void * context, int id);
 
@@ -622,10 +565,6 @@ static ThreadPool pool;
 static void pool_func(void * arg) {
     uint i = uint((uintptr_t)arg); // This is OK, because workerCount should always be much smaller than 2^32
 
-    // if (pool.use_thread_affinity) {
-    //     lockThreadToProcessor(i + pool.use_calling_thread);
-    // }
-
     while (true) 
     {
         event_wait(&pool.startEvents[i]);
@@ -641,7 +580,6 @@ static void pool_func(void * arg) {
         event_post(&pool.finishEvents[i]);
     }
 }
-
 
 void thread_pool_run(ThreadTask * func, void * arg)
 {
@@ -675,7 +613,7 @@ int init_pfor(int worker_count, bool use_calling_thread) {
     }
 
     for (int i = 0; i < worker_count - use_calling_thread; i++) {
-        snprintf(pool.workers[i].name, IC_MAX_THREAD_NAME_LENGTH, "ic-pfor-worker %d", i);
+        snprintf(pool.workers[i].name, IC_MAX_THREAD_NAME_LENGTH, "ic_pfor_worker %d", i);
         thread_start(&pool.workers[i], pool_func, (void*)(uintptr_t)(i));
     }
 
@@ -699,6 +637,10 @@ void shut_pfor() {
         event_destroy(&pool.finishEvents[i]);
     }
 }
+
+
+////////////////////////////////////////////////////////
+// Parallel For
 
 struct ParallelFor {
     ForTask * func;
@@ -740,7 +682,6 @@ void pfor_run(ForTask * task, void * context, uint count, uint step/*= 1*/) {
 
     IC_ASSERT(pf.idx >= pf.count);
 }
-
 
 } // ic
 #endif // IC_PFOR_IMPLEMENTATION
