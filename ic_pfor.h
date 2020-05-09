@@ -1,29 +1,44 @@
-// ic_parallel_for v1.0 - Ignacio Castano <castano@gmail.com>
+// ic_pfor v1.0 - Ignacio Castano <castano@gmail.com>
 // LICENSE: MIT License at the end of this file.
+//
 // USAGE:
-// ic::parallel_for(256, [&](int i){
+//
+// ic::pfor(256, [&](int i){
 //     ... // This will be invoked 256 times with i from 0 to 255.
-// })
+// });
+//
+// You can define IC_THREAD_NAME to invoke your own thread naming function, for example, for
+// telemetry:
 //
 // #define IC_THREAD_NAME(id, name) tmThreadName(0, id, name);
 //
+// To create threads that can use the CRT safely on windows, define:
+//
+// #define IC_INIT_THREAD_CRT 1
+//
+// Maximum thread count is limited to 32, to set a higher (or lower) limit use:
+//
+// #define IC_MAX_THREAD_COUNT 32
+//
+// I haven't really tested this library with more than 16 threads.
+//
+// To change the size of the allocated stacks:
+//
+// #define IC_THREAD_STACK_SIZE 0
+//
+// 0 means default.
+
 
 #pragma once
 
-// Allow disabling C++11
-#ifndef IC_CC_CPP11
-#define IC_CC_CPP11 (__cplusplus > 199711L || _MSC_VER >= 1800)
-#endif
-
-/*
+// Allow disabling C++11 lambdas.
+#ifndef IC_CC_LAMBDAS
 #ifdef __clang__
-#define IC_CC_CPP11 (__has_feature(cxx_deleted_functions) && __has_feature(cxx_rvalue_references) && __has_feature(cxx_static_assert))
-#elif defined __GNUC__ 
-#define IC_CC_CPP11 ( __GNUC__ > 4 || (__GNUC__ == 4 && __GNUC_MINOR__ >= 4))
+#define IC_CC_LAMBDAS __has_feature(cxx_lambdas)
+#else
+#define IC_CC_LAMBDAS (_MSC_VER >= 1800)
 #endif
 #endif
-*/
-
 
 namespace ic {
 
@@ -35,7 +50,7 @@ namespace ic {
     typedef void ForTask(void * context, int idx);
     void pfor_run (ForTask * task, void * context, unsigned int count, unsigned int step = 1);
 
-#if IC_CC_CPP11
+#if IC_CC_LAMBDAS
     template <typename F>
     void pfor(unsigned int count, unsigned int step, F f) {
         // Transform lambda into function pointer.
@@ -47,13 +62,31 @@ namespace ic {
         pfor_run(lambda, &f, count, step);
     }
 
-    template <typename F>
-    void pfor(unsigned int count, F f) {
-        pfor(count, /*step=*/1, f);
-    }
+    // Some shenanigas for a slightly better syntax.
+    template<typename F> 
+    struct PForRun {
+        F f;
+        unsigned int count;
+        unsigned int step;
+        PForRun(unsigned int count, unsigned int step, F f):f(f) {
+            pfor(count, step, f);
+        }
+    private:
+        PForRun& operator=(const PForRun&);
+    };
+    struct PForHelp {
+        unsigned int count;
+        unsigned int step;
+        PForHelp(unsigned int count, unsigned int step) : count(count), step(step) {}
+        template<typename F> PForRun<F> operator+(F f) { return PForRun<F>(count, step, f); }
+    };
 
-#endif // IC_CC_CPP11
-}
+    //#define ic_pfor(IDX, COUNT) const auto& CONCAT(pfor__, __LINE__) = ic::PForHelp(COUNT, 1) + [&](int IDX)
+    #define ic_pfor(IDX, COUNT, STEP) const auto& CONCAT(pfor__, __LINE__) = ic::PForHelp(COUNT, STEP) + [&](int IDX)
+
+#endif // IC_CC_LAMBDAS
+
+} // ic
 
 
 #ifdef IC_PFOR_IMPLEMENTATION

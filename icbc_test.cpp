@@ -329,7 +329,8 @@ bool encode_image(const char * input_filename) {
 
         timer.start();
 
-        ic::pfor(block_count, 32, [=](int b) {
+        //ic::pfor(block_count, 32, [=](int b) {
+        ic_pfor(b, block_count, 32) {
             float input_colors[16 * 4];
             float input_weights[16];
             for (int j = 0; j < 16; j++) {
@@ -341,7 +342,8 @@ bool encode_image(const char * input_filename) {
             }
 
             icbc::compress_dxt1(input_colors, input_weights, color_weights, /*three_color_mode=*/true, /*hq=*/false, (block_data + b * 8));
-        });
+        };
+        //});
 
         estimate.add(timer.stop());
     }
