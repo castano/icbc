@@ -78,7 +78,7 @@ namespace ic {
 #define IC_STATIC_ASSERT(x) IC_ASSERT(x)
 
 #if ((defined(_WIN32) || defined WIN32 || defined __NT__ || defined __WIN32__) && !defined __CYGWIN__)
-#define IC_OS_WINDOWS
+#define IC_OS_WINDOWS 1
 #endif
 #if (defined linux || defined __linux__)
 #define IC_OS_LINUX 1
