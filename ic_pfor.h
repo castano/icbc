@@ -91,7 +91,9 @@ namespace ic {
 #define IC_STATIC_ASSERT(x) static_assert(x, #x)
 
 #if ((defined(_WIN32) || defined WIN32 || defined __NT__ || defined __WIN32__) && !defined __CYGWIN__)
-#define IC_OS_WINDOWS
+#define IC_OS_WINDOWS 1
+#else
+#define IC_IS_WINDOWS 0
 #endif
 #if (defined linux || defined __linux__)
 #define IC_OS_LINUX 1
@@ -110,6 +112,8 @@ namespace ic {
 #endif
 #if defined(__CYGWIN__)
 #define IC_OS_CYGWIN 1
+#else
+#define IC_OS_CYGWIN 0
 #endif
 
 #if IC_OS_WINDOWS || IC_OS_CYGWIN
