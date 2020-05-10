@@ -394,9 +394,7 @@ static unsigned long __stdcall threadFunc(void * arg)
 {
     Thread * thread = (Thread *)arg;
     DWORD id = GetCurrentThreadId();
-#if !IC_OS_CYGWIN    
-//    setThreadName(id, thread->name);
-#endif
+    setThreadName(id, thread->name);
     #ifdef IC_THREAD_NAME
     IC_THREAD_NAME(id, thread->name);
     #endif
