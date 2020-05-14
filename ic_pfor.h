@@ -1,5 +1,5 @@
 // ic_pfor v1.0 - Ignacio Castano <castano@gmail.com>
-// LICENSE: 
+// LICENSE:
 //  MIT License at the end of this file.
 
 #ifndef IC_PFOR_H
@@ -7,7 +7,9 @@
 
 // Allow disabling C++11 lambdas.
 #ifndef IC_CC_LAMBDAS
-#ifdef __clang__
+#if defined(__GNUC__)
+#define IC_CC_LAMBDAS __cplusplus>=201103L
+#elif defined(__clang__)
 #define IC_CC_LAMBDAS __has_feature(cxx_lambdas)
 #else
 #define IC_CC_LAMBDAS (_MSC_VER >= 1800)
@@ -40,7 +42,7 @@ namespace ic {
 
     // Some shenanigas for a slightly better syntax:
     // ic_pfor(idx, count, step) { ... }
-    template<typename F> 
+    template<typename F>
     struct PForRun {
         F f;
         unsigned int count;
@@ -72,7 +74,7 @@ namespace ic {
 // Maximum thread count is fixed, but can be tweaked with this definition:
 #ifndef IC_MAX_THREAD_COUNT
 #define IC_MAX_THREAD_COUNT 32
-#endif 
+#endif
 
 #ifndef IC_THREAD_STACK_SIZE
 #define IC_THREAD_STACK_SIZE 0 // Use default size.
@@ -125,7 +127,7 @@ namespace ic {
 #if !IC_OS_WINDOWS
 #include <pthread.h>
 //#include <sys/types.h>
-//#include <unistd.h>
+#include <unistd.h> // sysconf
 #endif
 
 #if IC_OS_DARWIN
@@ -145,7 +147,7 @@ typedef uint32_t uint;
 typedef uint32_t uint32;
 
 /// Return the minimum of two values.
-template <typename T> 
+template <typename T>
 //inline const T & min(const T & a, const T & b)
 inline T min(const T & a, const T & b)
 {
@@ -170,7 +172,7 @@ inline T min(const T & a, const T & b)
 
 #if _MSC_VER >= 1400  // ReadBarrier is VC2005
 #pragma intrinsic(_ReadBarrier)
-#define compiler_read_barrier       _ReadBarrier    
+#define compiler_read_barrier       _ReadBarrier
 #else
 #define compiler_read_barrier       _ReadWriteBarrier
 #endif
@@ -201,7 +203,7 @@ inline T load_acquire_pointer(volatile T * ptr) {
     T ret = *ptr;   // on x86, loads are Acquire
     compiler_read_barrier();
     return ret;
-} 
+}
 
 #undef compiler_rw_barrier
 #undef compiler_read_barrier
@@ -380,7 +382,7 @@ static unsigned long __stdcall threadFunc(void * arg)
 {
     Thread * thread = (Thread *)arg;
     DWORD id = GetCurrentThreadId();
-#if !IC_OS_CYGWIN    
+#if !IC_OS_CYGWIN
 //    setThreadName(id, thread->name);
 #endif
     #ifdef IC_THREAD_NAME
@@ -504,25 +506,25 @@ static void event_post(Event * event)
     pthread_mutex_lock(&event->pt_mutex);
 
     event->count += 1;
-    
+
     if (event->wait_count > 0) {
         pthread_cond_signal(&event->pt_cond);
     }
-    
+
     pthread_mutex_unlock(&event->pt_mutex);
 }
 
 static void event_wait(Event * event)
 {
     pthread_mutex_lock(&event->pt_mutex);
-    
+
     while (event->count == 0) {
         event->wait_count += 1;
         pthread_cond_wait(&event->pt_cond, &event->pt_mutex);
         event->wait_count -= 1;
     }
     event->count -= 1;
-    
+
     pthread_mutex_unlock(&event->pt_mutex);
 }
 
@@ -565,7 +567,7 @@ static ThreadPool pool;
 static void pool_func(void * arg) {
     uint i = uint((uintptr_t)arg); // This is OK, because workerCount should always be much smaller than 2^32
 
-    while (true) 
+    while (true)
     {
         event_wait(&pool.startEvents[i]);
 
@@ -574,7 +576,7 @@ static void pool_func(void * arg) {
         if (func == NULL) {
             return;
         }
-        
+
         func(pool.arg, i + pool.use_calling_thread);
 
         event_post(&pool.finishEvents[i]);
@@ -599,7 +601,7 @@ void thread_pool_run(ThreadTask * func, void * arg)
 }
 
 int init_pfor(int worker_count, bool use_calling_thread) {
-    
+
     if (worker_count <= 0) {
         worker_count = get_processor_count();
     }
