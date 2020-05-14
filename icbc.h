@@ -1,6 +1,6 @@
 // icbc.h v1.02
 // A High Quality BC1 Encoder by Ignacio Castano <castano@gmail.com>.
-// 
+//
 // LICENSE:
 //  MIT license at the end of this file.
 
@@ -46,7 +46,7 @@ namespace icbc {
 //#define ICBC_USE_RCP 1
 
 #ifndef ICBC_USE_SPMD
-#define ICBC_USE_SPMD 5          // SIMD version. (FLOAT=0, SSE2=1, SSE41=2, AVX1=3, AVX2=4, AVX512=5, NEON=6)
+#define ICBC_USE_SPMD 5          // SIMD version. (FLOAT=0, SSE2=1, SSE41=2, AVX1=3, AVX2=4, AVX512=5, NEON=-1)
 #endif
 
 #if ICBC_USE_SPMD == ICBC_AVX2
@@ -59,6 +59,10 @@ namespace icbc {
 #define ICBC_USE_AVX512_PERMUTE 1
 #endif
 
+#if ICBC_USE_SPMD == ICBC_NEON
+#define ICBC_USE_NEON_VTL 0        // @@ Not implemented yet.
+#endif
+
 
 #ifndef ICBC_DECODER
 #define ICBC_DECODER 0       // 0 = d3d10, 1 = nvidia, 2 = amd
@@ -67,7 +71,7 @@ namespace icbc {
 
 #if ICBC_USE_SPMD >= ICBC_SSE2
 #include <emmintrin.h>
-#endif 
+#endif
 
 #if ICBC_USE_SPMD >= ICBC_SSE41
 #include <smmintrin.h>
@@ -388,6 +392,7 @@ ICBC_FORCEINLINE VFloat vround(VFloat a) {
 #if ICBC_USE_SPMD == ICBC_SSE41
     return _mm_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 #else
+    // @@ Assumes a is positive and small.
     return _mm_cvtepi32_ps(_mm_cvttps_epi32(a + vbroadcast(0.5f)));
 #endif
 }
@@ -650,23 +655,46 @@ ICBC_FORCEINLINE bool any(VMask mask) {
 
 #define VEC_SIZE 4
 
+#if __GNUC__
+struct VFloat {
+    float32x4_t v;
+    VFloat() {}
+    VFloat(float32x4_t v) : v(v) {}
+    operator float32x4_t & () { return v; }
+};
+struct VMask {
+    uint32x4_t v;
+    VMask() {}
+    VMask(uint32x4_t v) : v(v) {}
+    operator uint32x4_t & () { return v; }
+};
+#else
 using VFloat = float32x4_t;
 using VMask = uint32x4_t;
+#endif
 
 ICBC_FORCEINLINE float & lane(VFloat & v, int i) {
-    // @@
+    return v.v[i];
 }
 
+/*ICBC_FORCEINLINE float vextract(VFloat v, int i) {
+    return vgetq_lane_f32(v, i);
+}
+
+ICBC_FORCEINLINE VFloat vinsert(VFloat v, float x, int i) {
+    return vsetq_lane_f32(x, v, i);
+}*/
+
 ICBC_FORCEINLINE VFloat vzero() {
-    // @@
+    return vdupq_n_f32(0.0f);
 }
 
 ICBC_FORCEINLINE VFloat vbroadcast(float a) {
-    return vld1q_f32(&a);
+    return vdupq_n_f32(a);
 }
 
 ICBC_FORCEINLINE VFloat vload(const float * ptr) {
-    // @@
+    return vld1q_f32(ptr);
 }
 
 ICBC_FORCEINLINE VFloat operator+(VFloat a, VFloat b) {
@@ -682,16 +710,18 @@ ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
 }
 
 ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
-#if ICBC_USE_RCP
-    return vrecpeq_f32(a);  // @@ What's the precision of this?
-#else
-    return vdiv_f32(vbroadcast(1.0f), a);
-#endif
+//#if ICBC_USE_RCP
+    VFloat rcp = vrecpeq_f32(a);
+    //return rcp;
+    return vmulq_f32(vrecpsq_f32(a, rcp), rcp);
+//#else
+//    return vdiv_f32(vbroadcast(1.0f), a);    // @@ ARMv8 only?
+//#endif
 }
 
 // a*b+c
 ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) {
-    return a*b+c; // @@
+    return vmlaq_f32(c, a, b);
 }
 
 ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
@@ -699,39 +729,71 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
 }
 
 ICBC_FORCEINLINE VFloat vround(VFloat a) {
+#if __ARM_RACH >= 8
     return vrndq_f32(a);
+#else
+    // @@ Assumes a is positive and ~small
+    return vcvtq_f32_s32(vcvtq_s32_f32(a + vbroadcast(0.5)));
+#endif
 }
 
 ICBC_FORCEINLINE VFloat lane_id() {
-    // @@
+    ICBC_ALIGN_16 float data[4] = { 0, 1, 2, 3 };
+	return vld1q_f32(data);
 }
 
-ICBC_FORCEINLINE VMask operator> (VFloat A, VFloat B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GT_OQ) }; }
-ICBC_FORCEINLINE VMask operator>=(VFloat A, VFloat B) { return { _mm512_cmp_ps_mask(A, B, _CMP_GE_OQ) }; }
-ICBC_FORCEINLINE VMask operator< (VFloat A, VFloat B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LT_OQ) }; }
-ICBC_FORCEINLINE VMask operator<=(VFloat A, VFloat B) { return { _mm512_cmp_ps_mask(A, B, _CMP_LE_OQ) }; }
+ICBC_FORCEINLINE VMask operator> (VFloat A, VFloat B) { return { vcgtq_f32(A, B) }; }
+ICBC_FORCEINLINE VMask operator>=(VFloat A, VFloat B) { return { vcgeq_f32(A, B) }; }
+ICBC_FORCEINLINE VMask operator< (VFloat A, VFloat B) { return { vcltq_f32(A, B) }; }
+ICBC_FORCEINLINE VMask operator<=(VFloat A, VFloat B) { return { vcleq_f32(A, B) }; }
 
-ICBC_FORCEINLINE VMask operator! (VMask A) { return { _mm512_knot(A.m) }; }
-ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return { _mm512_kor(A.m, B.m) }; }
-ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return { _mm512_kand(A.m, B.m) }; }
-ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return { _mm512_kxor(A.m, B.m) }; }
+ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return { vorrq_u32(A, B) }; }
+ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return { vandq_u32(A, B) }; }
+ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return { veorq_u32(A, B) }; }
 
 // mask ? b : a
 ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
-    return vbslq_f32(mask, a, b);
+    return vbslq_f32(mask, b, a);
 }
 
-ICBC_FORCEINLINE bool all(VMask mask) {
+/*ICBC_FORCEINLINE bool all(VMask mask) {
     // @@
 }
 
 ICBC_FORCEINLINE bool any(VMask mask) {
     // @@
+}*/
+
+/*
+#define REDUCE_MIN_INDEX
+inline int reduce_min_index(VFloat v) {
+    float32x2_t minOfHalfs = vpmin_f32(vget_low_f32(v), vget_high_f32(v));
+    float32x2_t minOfMaxOfHalfs = vpmin_f32(minOfHalfs, minOfHalfs);
+    float minValue = vget_lane_f32(minOfMaxOfHalfs, 0);
+    // @@ Find the lane that contains minValue?
 }
+*/
 
 #endif // ICBC_NEON
 
-#if ICBC_USE_SPMD
+#if !REDUCE_MIN_INDEX
+inline int reduce_min_index(VFloat v) {
+    // @@ Is there a better way to do this reduction?
+    int min_idx = 0;
+    float min_value = lane(v, 0);
+
+    for (int i = 1; i < VEC_SIZE; i++) {
+        float value = lane(v, i);
+        if (value < min_value) {
+            min_value = value;
+            min_idx = i;
+        }
+    }
+
+    return min_idx;
+}
+#endif
+
 
 struct VVector3 {
     VFloat x;
@@ -741,6 +803,7 @@ struct VVector3 {
 
 ICBC_FORCEINLINE VVector3 vbroadcast(Vector3 v) {
     VVector3 v8;
+
     v8.x = vbroadcast(v.x);
     v8.y = vbroadcast(v.y);
     v8.z = vbroadcast(v.z);
@@ -839,7 +902,7 @@ ICBC_FORCEINLINE VVector3 vround_ept(VVector3 v) {
     const VFloat g_inv_scale = vbroadcast(1.0f / 63.0f);
 
     VVector3 r;
-#if ICBC_PERFECT_ROUND    
+#if ICBC_PERFECT_ROUND
     r.x = vround5(v.x * rb_scale) * rb_inv_scale;
     r.y = vround6(v.y * g_scale) * g_inv_scale;
     r.z = vround5(v.z * rb_scale) * rb_inv_scale;
@@ -866,7 +929,6 @@ ICBC_FORCEINLINE VVector3 vselect(VMask mask, VVector3 a, VVector3 b) {
     return r;
 }
 
-#endif // ICBC_USE_SPMD
 
 
 
@@ -879,9 +941,9 @@ static const float midpoints5[32] = {
 };
 
 static const float midpoints6[64] = {
-    0.007843f, 0.023529f, 0.039216f, 0.054902f, 0.070588f, 0.086275f, 0.101961f, 0.117647f, 0.133333f, 0.149020f, 0.164706f, 0.180392f, 0.196078f, 0.211765f, 0.227451f, 0.245098f, 
-    0.262745f, 0.278431f, 0.294118f, 0.309804f, 0.325490f, 0.341176f, 0.356863f, 0.372549f, 0.388235f, 0.403922f, 0.419608f, 0.435294f, 0.450980f, 0.466667f, 0.482353f, 0.500000f, 
-    0.517647f, 0.533333f, 0.549020f, 0.564706f, 0.580392f, 0.596078f, 0.611765f, 0.627451f, 0.643137f, 0.658824f, 0.674510f, 0.690196f, 0.705882f, 0.721569f, 0.737255f, 0.754902f, 
+    0.007843f, 0.023529f, 0.039216f, 0.054902f, 0.070588f, 0.086275f, 0.101961f, 0.117647f, 0.133333f, 0.149020f, 0.164706f, 0.180392f, 0.196078f, 0.211765f, 0.227451f, 0.245098f,
+    0.262745f, 0.278431f, 0.294118f, 0.309804f, 0.325490f, 0.341176f, 0.356863f, 0.372549f, 0.388235f, 0.403922f, 0.419608f, 0.435294f, 0.450980f, 0.466667f, 0.482353f, 0.500000f,
+    0.517647f, 0.533333f, 0.549020f, 0.564706f, 0.580392f, 0.596078f, 0.611765f, 0.627451f, 0.643137f, 0.658824f, 0.674510f, 0.690196f, 0.705882f, 0.721569f, 0.737255f, 0.754902f,
     0.772549f, 0.788235f, 0.803922f, 0.819608f, 0.835294f, 0.850980f, 0.866667f, 0.882353f, 0.898039f, 0.913725f, 0.929412f, 0.945098f, 0.960784f, 0.976471f, 0.992157f, 1.0f
 };
 
@@ -950,7 +1012,7 @@ inline Color32 vector3_to_color32(Vector3 v) {
 // Input block processing.
 
 inline bool is_black(Vector3 c) {
-    // This large threshold seems to improve compression. This is not forcing these texels to be black, just 
+    // This large threshold seems to improve compression. This is not forcing these texels to be black, just
     // causes them to be ignored during PCA.
     //return c.x < midpoints5[0] && c.y < midpoints6[0] && c.z < midpoints5[0];
     //return c.x < 1.0f / 32 && c.y < 1.0f / 32 && c.z < 1.0f / 32;
@@ -1210,7 +1272,7 @@ int compute_sat(const Vector3 * colors, const float * weights, int count, Summed
         }
     }*/
 
-    return count;    
+    return count;
 }
 
 
@@ -1533,6 +1595,40 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         x1.z = _mm256_i32gather_ps(base + 2, c1, 4);
         w1 = _mm256_i32gather_ps(base + 3, c1, 4);
 
+#elif ICBC_USE_NEON_VTL
+
+        // @@ This is invariant per loop:
+        // Load each sat in 4 registers:
+        VFloat vrsat[4], vgsat[4], vbsat[4], vwsat[4];
+        vrsat[0] = vload(sat.r);
+        vgsat[0] = vload(sat.g);
+        vbsat[0] = vload(sat.b);
+        vwsat[0] = vload(sat.w);
+        if (count > 4) {
+            vrsat[1] = vload(sat.r + 4);
+            vgsat[1] = vload(sat.g + 4);
+            vbsat[1] = vload(sat.b + 4);
+            vwsat[1] = vload(sat.w + 4);
+            if (count > 4) {
+                vrsat[2] = vload(sat.r + 8);
+                vgsat[2] = vload(sat.g + 8);
+                vbsat[2] = vload(sat.b + 8);
+                vwsat[2] = vload(sat.w + 8);
+                if (count > 4) {
+                    vrsat[3] = vload(sat.r + 12);
+                    vgsat[3] = vload(sat.g + 12);
+                    vbsat[3] = vload(sat.b + 12);
+                    vwsat[3] = vload(sat.w + 12);
+                }
+            }
+        }
+
+        // Load 4 uint8 per lane.
+        //VInt packedClusterIndex = viload((VInt *)&s_threeCluster[i]);
+
+        // @@ Extract each s8.
+        // @@ use vtbl to lookup
+
 #else
         // Plain scalar path
         x0.x = vzero(); x0.y = vzero(); x0.z = vzero(); w0 = vzero();
@@ -1598,15 +1694,7 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         vbestend = vselect(mask, vbestend, b);
     }
 
-    // Is there a better way to do this reduction?
-    float besterror = FLT_MAX;    
-    int bestindex;
-    for (int i = 0; i < VEC_SIZE; i++) {
-        if (lane(vbesterror, i) < besterror) {
-            besterror = lane(vbesterror, i);
-            bestindex = i;
-        }
-    }
+    int bestindex = reduce_min_index(vbesterror);
 
     // declare variables
     Vector3 beststart;
@@ -1614,7 +1702,7 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
     beststart.y = lane(vbeststart.y, bestindex);
     beststart.z = lane(vbeststart.z, bestindex);
 
-    Vector3 bestend;    
+    Vector3 bestend;
     bestend.x = lane(vbestend.x, bestindex);
     bestend.y = lane(vbestend.y, bestindex);
     bestend.z = lane(vbestend.z, bestindex);
@@ -1847,7 +1935,7 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
 
         }
         else {
-            // Unpack indices.           
+            // Unpack indices.
             auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
             auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
             auto c0Hi = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
@@ -2027,7 +2115,7 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
 
         // keep the solution if it wins
         auto mask = (error < vbesterror);
-        
+
         // We could mask the unused lanes here, but instead set the invalid SAT entries to FLT_MAX.
         //mask = (mask & (vbroadcast(total_order_count) >= tid8(i))); // This doesn't seem to help. Is it OK to consider elements out of bounds?
 
@@ -2036,21 +2124,14 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         vbestend = vselect(mask, vbestend, b);
     }
 
-    // Is there a better way to do this reduction?
-    float besterror = FLT_MAX;    
-    int bestindex;
-    for (int i = 0; i < VEC_SIZE; i++) {
-        if (lane(vbesterror, i) < besterror) {
-            besterror = lane(vbesterror, i);
-            bestindex = i;
-        }
-    }
+    int bestindex = reduce_min_index(vbesterror);
 
     Vector3 beststart;
-    Vector3 bestend;
     beststart.x = lane(vbeststart.x, bestindex);
     beststart.y = lane(vbeststart.y, bestindex);
     beststart.z = lane(vbeststart.z, bestindex);
+
+    Vector3 bestend;
     bestend.x = lane(vbestend.x, bestindex);
     bestend.y = lane(vbestend.y, bestindex);
     bestend.z = lane(vbestend.z, bestindex);
@@ -2379,7 +2460,7 @@ void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
         a = round(grid * a) * gridrcp;
         b = round(grid * b) * gridrcp;
 #endif
-        // @@ It would be much more accurate to evaluate the error exactly. 
+        // @@ It would be much more accurate to evaluate the error exactly.
 
         // compute the error
         Vector3 e1 = a * a*alpha2_sum + b * b*beta2_sum +2.0f*(a*b*alphabeta_sum - a * alphax_sum - b * betax_sum);
@@ -2590,7 +2671,7 @@ static int evaluate_mse(const BlockDXT1 * output, Color32 color, int index) {
 
 // Returns weighted MSE error in [0-255] range.
 static float evaluate_palette_error(Color32 palette[4], const Color32 * colors, const float * weights, int count) {
-    
+
     float total = 0.0f;
     for (int i = 0; i < count; i++) {
         total += weights[i] * evaluate_mse(palette, colors[i]);
@@ -2653,7 +2734,7 @@ float evaluate_dxt1_error(const uint8 rgba_block[16*4], const BlockDXT1 * block,
 // Index selection
 
 static uint compute_indices4(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
-    
+
     uint indices = 0;
     for (int i = 0; i < 16; i++) {
         float d0 = evaluate_mse(palette[0], input_colors[i].xyz, color_weights);
@@ -2705,7 +2786,7 @@ static uint compute_indices4(const Vector3 input_colors[16], const Vector3 palet
 
 
 static uint compute_indices(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
-    
+
     uint indices = 0;
     for (int i = 0; i < 16; i++) {
         float d0 = evaluate_mse(palette[0], input_colors[i].xyz, color_weights);
@@ -3012,7 +3093,7 @@ static void compress_dxt1_single_color_optimal(Color32 c, BlockDXT1 * output)
     output->col1.g = s_match6[c.g][1];
     output->col1.b = s_match5[c.b][1];
     output->indices = 0xaaaaaaaa;
-    
+
     if (output->col0.u < output->col1.u)
     {
         swap(output->col0.u, output->col1.u);
@@ -3088,47 +3169,6 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
     }
 
     return best_error;
-
-    /*
-    ClusterFit fit;
-    fit.setColorSet(colors, weights, count, color_weights);
-
-    // start & end are in [0, 1] range.
-    Vector3 start, end;
-    fit.compress4(&start, &end);
-    
-    output_block4(input_colors, color_weights, start, end, output);
-
-    float best_error = evaluate_mse(input_colors, input_weights, color_weights, output);
-
-    if (three_color_mode) {
-        if (fit.anyBlack) {
-            Vector3 tmp_colors[16];
-            float tmp_weights[16];
-            int tmp_count = skip_blacks(colors, weights, count, tmp_colors, tmp_weights);
-            if (!tmp_count) return FLT_MAX;
-
-            fit.setColorSet(tmp_colors, tmp_weights, tmp_count, color_weights);
-
-            fit.compress3(&start, &end);
-        }
-        else {
-            fit.compress3(&start, &end);
-        }
-
-        BlockDXT1 three_color_block;
-        output_block3(input_colors, color_weights, start, end, &three_color_block);
-
-        float three_color_error = evaluate_mse(input_colors, input_weights, color_weights, &three_color_block);
-
-        if (three_color_error < best_error) {
-            best_error = three_color_error;
-            *output = three_color_block;
-        }
-    }
-
-    return best_error;
-    */
 }
 
 
@@ -3273,7 +3313,7 @@ static float compress_dxt1(const Vector4 input_colors[16], const float input_wei
 }
 
 
-// 
+//
 static bool centroid_end_points(uint indices, const Vector3 * colors, /*const float * weights,*/ float factor[4], Vector3 * c0, Vector3 * c1) {
 
     *c0 = { 0,0,0 };
