@@ -656,8 +656,9 @@ ICBC_FORCEINLINE bool any(VMask mask) {
 #define VEC_SIZE 4
 
 #if __GNUC__
-struct VFloat {
+union VFloat {
     float32x4_t v;
+    float e[4];
     VFloat() {}
     VFloat(float32x4_t v) : v(v) {}
     operator float32x4_t & () { return v; }
@@ -674,15 +675,19 @@ using VMask = uint32x4_t;
 #endif
 
 ICBC_FORCEINLINE float & lane(VFloat & v, int i) {
+#if defined(__clang__)
+    return v.e[i];
+#else
     return v.v[i];
+#endif
 }
 
 /*ICBC_FORCEINLINE float vextract(VFloat v, int i) {
-    return vgetq_lane_f32(v, i);
+    return vgetq_lane_f32(v, i);      // @@ i must be constant
 }
 
 ICBC_FORCEINLINE VFloat vinsert(VFloat v, float x, int i) {
-    return vsetq_lane_f32(x, v, i);
+    return vsetq_lane_f32(x, v, i);   // @@ i must be constant
 }*/
 
 ICBC_FORCEINLINE VFloat vzero() {
