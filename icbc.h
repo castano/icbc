@@ -1293,6 +1293,16 @@ static ICBC_ALIGN_16 int s_threeClusterTotal[16];
 static ICBC_ALIGN_16 Combinations s_fourCluster[968 + 8];
 static ICBC_ALIGN_16 Combinations s_threeCluster[152 + 8];
 
+#if ICBC_USE_NEON_VTL
+static uint8 s_neon_vtl_index0_4[4 * 968];
+static uint8 s_neon_vtl_index1_4[4 * 968];
+static uint8 s_neon_vtl_index2_4[4 * 968];
+
+static uint8 s_neon_vtl_index0_3[4 * 152];
+static uint8 s_neon_vtl_index1_3[4 * 152];
+#endif
+
+
 static void init_cluster_tables() {
 
     for (int t = 1, i = 0; t <= 16; t++) {
@@ -1363,6 +1373,43 @@ static void init_cluster_tables() {
     for (int i = 0; i < 8; i++) {
         s_threeCluster[152 + i] = s_threeCluster[152 - 1];
     }
+
+#if ICBC_USE_NEON_VTL
+    for (int i = 0; i < 968; i++) {
+        int c0 = (s_threeCluster.c0) - 1;
+        s_neon_vtl_index0_4[4 * i + 0] = uint8(c0 * 4 + 0);
+        s_neon_vtl_index0_4[4 * i + 1] = uint8(c0 * 4 + 1);
+        s_neon_vtl_index0_4[4 * i + 2] = uint8(c0 * 4 + 2);
+        s_neon_vtl_index0_4[4 * i + 3] = uint8(c0 * 4 + 3);
+
+        int c1 = (s_threeCluster.c1) - 1;
+        s_neon_vtl_index1_4[4 * i + 0] = uint8(c1 * 4 + 0);
+        s_neon_vtl_index1_4[4 * i + 1] = uint8(c1 * 4 + 1);
+        s_neon_vtl_index1_4[4 * i + 2] = uint8(c1 * 4 + 2);
+        s_neon_vtl_index1_4[4 * i + 3] = uint8(c1 * 4 + 3);
+
+        int c2 = (s_threeCluster.c2) - 1;
+        s_neon_vtl_index2_4[4 * i + 0] = uint8(c2 * 4 + 0);
+        s_neon_vtl_index2_4[4 * i + 1] = uint8(c2 * 4 + 1);
+        s_neon_vtl_index2_4[4 * i + 2] = uint8(c2 * 4 + 2);
+        s_neon_vtl_index2_4[4 * i + 3] = uint8(c2 * 4 + 3);
+    }
+
+    for (int i = 0; i < 152; i++) {
+        int c0 = (s_threeCluster.c0) - 1;
+        s_neon_vtl_index0_3[4 * i + 0] = uint8(c0 * 4 + 0);
+        s_neon_vtl_index0_3[4 * i + 1] = uint8(c0 * 4 + 1);
+        s_neon_vtl_index0_3[4 * i + 2] = uint8(c0 * 4 + 2);
+        s_neon_vtl_index0_3[4 * i + 3] = uint8(c0 * 4 + 3);
+
+        int c1 = (s_threeCluster.c1) - 1;
+        s_neon_vtl_index1_3[4 * i + 0] = uint8(c1 * 4 + 0);
+        s_neon_vtl_index1_3[4 * i + 1] = uint8(c1 * 4 + 1);
+        s_neon_vtl_index1_3[4 * i + 2] = uint8(c1 * 4 + 2);
+        s_neon_vtl_index1_3[4 * i + 3] = uint8(c1 * 4 + 3);
+    }
+#endif
+
 }
 
 
@@ -1602,37 +1649,74 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
 
 #elif ICBC_USE_NEON_VTL
 
-        // @@ This is invariant per loop:
-        // Load each sat in 4 registers:
-        VFloat vrsat[4], vgsat[4], vbsat[4], vwsat[4];
-        vrsat[0] = vload(sat.r);
-        vgsat[0] = vload(sat.g);
-        vbsat[0] = vload(sat.b);
-        vwsat[0] = vload(sat.w);
-        if (count > 4) {
-            vrsat[1] = vload(sat.r + 4);
-            vgsat[1] = vload(sat.g + 4);
-            vbsat[1] = vload(sat.b + 4);
-            vwsat[1] = vload(sat.w + 4);
-            if (count > 4) {
-                vrsat[2] = vload(sat.r + 8);
-                vgsat[2] = vload(sat.g + 8);
-                vbsat[2] = vload(sat.b + 8);
-                vwsat[2] = vload(sat.w + 8);
-                if (count > 4) {
-                    vrsat[3] = vload(sat.r + 12);
-                    vgsat[3] = vload(sat.g + 12);
-                    vbsat[3] = vload(sat.b + 12);
-                    vwsat[3] = vload(sat.w + 12);
-                }
-            }
+        uint8x16_t idx0 = (uint8x16_t &)s_neon_vtl_index0_3[4*i];
+        uint8x16_t idx1 = (uint8x16_t &)s_neon_vtl_index1_3[4*i];
+
+        if (count <= 4) {
+            uint8x16_t rsat1 = vld1q_u8((u8*)sat.r);
+            uint8x16_t gsat1 = vld1q_u8((u8*)sat.g);
+            uint8x16_t bsat1 = vld1q_u8((u8*)sat.b);
+            uint8x16_t wsat1 = vld1q_u8((u8*)sat.w);
+
+            x0.x = vreinterpretq_f32_u8(vqtbl1q_u8(rsat1, idx0));
+            x0.y = vreinterpretq_f32_u8(vqtbl1q_u8(gsat1, idx0));
+            x0.z = vreinterpretq_f32_u8(vqtbl1q_u8(bsat1, idx0));
+            w0   = vreinterpretq_f32_u8(vqtbl1q_u8(wsat1, idx0));
+
+            x1.x = vreinterpretq_f32_u8(vqtbl1q_u8(rsat1, idx1));
+            x1.y = vreinterpretq_f32_u8(vqtbl1q_u8(gsat1, idx1));
+            x1.z = vreinterpretq_f32_u8(vqtbl1q_u8(bsat1, idx1));
+            w1   = vreinterpretq_f32_u8(vqtbl1q_u8(wsat1, idx1));
         }
+        else if (count <= 8) {
+            uint8x16x2_t rsat2 = vld2q_u8((u8*)sat.r);
+            uint8x16x2_t gsat2 = vld2q_u8((u8*)sat.g);
+            uint8x16x2_t bsat2 = vld2q_u8((u8*)sat.b);
+            uint8x16x2_t wsat2 = vld2q_u8((u8*)sat.w);
 
-        // Load 4 uint8 per lane.
-        //VInt packedClusterIndex = viload((VInt *)&s_threeCluster[i]);
+            x0.x = vreinterpretq_f32_u8(vqtbl2q_u8(rsat2, idx0));
+            x0.y = vreinterpretq_f32_u8(vqtbl2q_u8(gsat2, idx0));
+            x0.z = vreinterpretq_f32_u8(vqtbl2q_u8(bsat2, idx0));
+            w0   = vreinterpretq_f32_u8(vqtbl2q_u8(wsat2, idx0));
 
-        // @@ Extract each s8.
-        // @@ use vtbl to lookup
+            x1.x = vreinterpretq_f32_u8(vqtbl2q_u8(rsat2, idx1));
+            x1.y = vreinterpretq_f32_u8(vqtbl2q_u8(gsat2, idx1));
+            x1.z = vreinterpretq_f32_u8(vqtbl2q_u8(bsat2, idx1));
+            w1   = vreinterpretq_f32_u8(vqtbl2q_u8(wsat2, idx1));
+        }
+        else if (count <= 12) {
+            uint8x16x3_t rsat3 = vld3q_u8((u8*)sat.r);
+            uint8x16x3_t gsat3 = vld3q_u8((u8*)sat.g);
+            uint8x16x3_t bsat3 = vld3q_u8((u8*)sat.b);
+            uint8x16x3_t wsat3 = vld3q_u8((u8*)sat.w);
+
+            x0.x = vreinterpretq_f32_u8(vqtbl3q_u8(rsat3, idx0));
+            x0.y = vreinterpretq_f32_u8(vqtbl3q_u8(gsat3, idx0));
+            x0.z = vreinterpretq_f32_u8(vqtbl3q_u8(bsat3, idx0));
+            w0   = vreinterpretq_f32_u8(vqtbl3q_u8(wsat3, idx0));
+
+            x1.x = vreinterpretq_f32_u8(vqtbl3q_u8(rsat3, idx1));
+            x1.y = vreinterpretq_f32_u8(vqtbl3q_u8(gsat3, idx1));
+            x1.z = vreinterpretq_f32_u8(vqtbl3q_u8(bsat3, idx1));
+            w1   = vreinterpretq_f32_u8(vqtbl3q_u8(wsat3, idx1));
+        }
+        else {
+            // Load SAT.
+            uint8x16x4_t rsat4 = vld4q_u8((u8*)sat.r);
+            uint8x16x4_t gsat4 = vld4q_u8((u8*)sat.g);
+            uint8x16x4_t bsat4 = vld4q_u8((u8*)sat.b);
+            uint8x16x4_t wsat4 = vld4q_u8((u8*)sat.w);
+
+            x0.x = vreinterpretq_f32_u8(vqtbl4q_u8(rsat4, idx0));
+            x0.y = vreinterpretq_f32_u8(vqtbl4q_u8(gsat4, idx0));
+            x0.z = vreinterpretq_f32_u8(vqtbl4q_u8(bsat4, idx0));
+            w0   = vreinterpretq_f32_u8(vqtbl4q_u8(wsat4, idx0));
+
+            x1.x = vreinterpretq_f32_u8(vqtbl4q_u8(rsat4, idx1));
+            x1.y = vreinterpretq_f32_u8(vqtbl4q_u8(gsat4, idx1));
+            x1.z = vreinterpretq_f32_u8(vqtbl4q_u8(bsat4, idx1));
+            w1   = vreinterpretq_f32_u8(vqtbl4q_u8(wsat4, idx1));
+        }
 
 #else
         // Plain scalar path
@@ -2051,6 +2135,97 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         x2.z = _mm256_i32gather_ps(base + 2, c2, 4);
         w2 = _mm256_i32gather_ps(base + 3, c2, 4);
 #endif
+
+#elif ICBC_USE_NEON_VTL
+
+        uint8x16_t idx0 = (uint8x16_t &)s_neon_vtl_index0_4[4*i];
+        uint8x16_t idx1 = (uint8x16_t &)s_neon_vtl_index1_4[4*i];
+        uint8x16_t idx2 = (uint8x16_t &)s_neon_vtl_index2_4[4*i];
+
+        if (count <= 4) {
+            uint8x16_t rsat1 = vld1q_u8((u8*)sat.r);
+            uint8x16_t gsat1 = vld1q_u8((u8*)sat.g);
+            uint8x16_t bsat1 = vld1q_u8((u8*)sat.b);
+            uint8x16_t wsat1 = vld1q_u8((u8*)sat.w);
+
+            x0.x = vreinterpretq_f32_u8(vqtbl1q_u8(rsat1, idx0));
+            x0.y = vreinterpretq_f32_u8(vqtbl1q_u8(gsat1, idx0));
+            x0.z = vreinterpretq_f32_u8(vqtbl1q_u8(bsat1, idx0));
+            w0   = vreinterpretq_f32_u8(vqtbl1q_u8(wsat1, idx0));
+
+            x1.x = vreinterpretq_f32_u8(vqtbl1q_u8(rsat1, idx1));
+            x1.y = vreinterpretq_f32_u8(vqtbl1q_u8(gsat1, idx1));
+            x1.z = vreinterpretq_f32_u8(vqtbl1q_u8(bsat1, idx1));
+            w1   = vreinterpretq_f32_u8(vqtbl1q_u8(wsat1, idx1));
+
+            x2.x = vreinterpretq_f32_u8(vqtbl1q_u8(rsat1, idx2));
+            x2.y = vreinterpretq_f32_u8(vqtbl1q_u8(gsat1, idx2));
+            x2.z = vreinterpretq_f32_u8(vqtbl1q_u8(bsat1, idx2));
+            w2   = vreinterpretq_f32_u8(vqtbl1q_u8(wsat1, idx2));
+        }
+        else if (count <= 8) {
+            uint8x16x2_t rsat2 = vld2q_u8((u8*)sat.r);
+            uint8x16x2_t gsat2 = vld2q_u8((u8*)sat.g);
+            uint8x16x2_t bsat2 = vld2q_u8((u8*)sat.b);
+            uint8x16x2_t wsat2 = vld2q_u8((u8*)sat.w);
+
+            x0.x = vreinterpretq_f32_u8(vqtbl2q_u8(rsat2, idx0));
+            x0.y = vreinterpretq_f32_u8(vqtbl2q_u8(gsat2, idx0));
+            x0.z = vreinterpretq_f32_u8(vqtbl2q_u8(bsat2, idx0));
+            w0   = vreinterpretq_f32_u8(vqtbl2q_u8(wsat2, idx0));
+
+            x1.x = vreinterpretq_f32_u8(vqtbl2q_u8(rsat2, idx1));
+            x1.y = vreinterpretq_f32_u8(vqtbl2q_u8(gsat2, idx1));
+            x1.z = vreinterpretq_f32_u8(vqtbl2q_u8(bsat2, idx1));
+            w1   = vreinterpretq_f32_u8(vqtbl2q_u8(wsat2, idx1));
+
+            x2.x = vreinterpretq_f32_u8(vqtbl2q_u8(rsat2, idx2));
+            x2.y = vreinterpretq_f32_u8(vqtbl2q_u8(gsat2, idx2));
+            x2.z = vreinterpretq_f32_u8(vqtbl2q_u8(bsat2, idx2));
+            w2   = vreinterpretq_f32_u8(vqtbl2q_u8(wsat2, idx2));
+        }
+        else if (count <= 12) {
+            uint8x16x3_t rsat3 = vld3q_u8((u8*)sat.r);
+            uint8x16x3_t gsat3 = vld3q_u8((u8*)sat.g);
+            uint8x16x3_t bsat3 = vld3q_u8((u8*)sat.b);
+            uint8x16x3_t wsat3 = vld3q_u8((u8*)sat.w);
+
+            x0.x = vreinterpretq_f32_u8(vqtbl3q_u8(rsat3, idx0));
+            x0.y = vreinterpretq_f32_u8(vqtbl3q_u8(gsat3, idx0));
+            x0.z = vreinterpretq_f32_u8(vqtbl3q_u8(bsat3, idx0));
+            w0   = vreinterpretq_f32_u8(vqtbl3q_u8(wsat3, idx0));
+
+            x1.x = vreinterpretq_f32_u8(vqtbl3q_u8(rsat3, idx1));
+            x1.y = vreinterpretq_f32_u8(vqtbl3q_u8(gsat3, idx1));
+            x1.z = vreinterpretq_f32_u8(vqtbl3q_u8(bsat3, idx1));
+            w1   = vreinterpretq_f32_u8(vqtbl3q_u8(wsat3, idx1));
+
+            x2.x = vreinterpretq_f32_u8(vqtbl3q_u8(rsat3, idx2));
+            x2.y = vreinterpretq_f32_u8(vqtbl3q_u8(gsat3, idx2));
+            x2.z = vreinterpretq_f32_u8(vqtbl3q_u8(bsat3, idx2));
+            w2   = vreinterpretq_f32_u8(vqtbl3q_u8(wsat3, idx2));
+        }
+        else {
+            uint8x16x4_t rsat4 = vld4q_u8((u8*)sat.r);
+            uint8x16x4_t gsat4 = vld4q_u8((u8*)sat.g);
+            uint8x16x4_t bsat4 = vld4q_u8((u8*)sat.b);
+            uint8x16x4_t wsat4 = vld4q_u8((u8*)sat.w);
+
+            x0.x = vreinterpretq_f32_u8(vqtbl4q_u8(rsat4, idx0));
+            x0.y = vreinterpretq_f32_u8(vqtbl4q_u8(gsat4, idx0));
+            x0.z = vreinterpretq_f32_u8(vqtbl4q_u8(bsat4, idx0));
+            w0   = vreinterpretq_f32_u8(vqtbl4q_u8(wsat4, idx0));
+
+            x1.x = vreinterpretq_f32_u8(vqtbl4q_u8(rsat4, idx1));
+            x1.y = vreinterpretq_f32_u8(vqtbl4q_u8(gsat4, idx1));
+            x1.z = vreinterpretq_f32_u8(vqtbl4q_u8(bsat4, idx1));
+            w1   = vreinterpretq_f32_u8(vqtbl4q_u8(wsat4, idx1));
+
+            x2.x = vreinterpretq_f32_u8(vqtbl4q_u8(rsat4, idx2));
+            x2.y = vreinterpretq_f32_u8(vqtbl4q_u8(gsat4, idx2));
+            x2.z = vreinterpretq_f32_u8(vqtbl4q_u8(bsat4, idx2));
+            w2   = vreinterpretq_f32_u8(vqtbl4q_u8(wsat4, idx2));
+        }
 
 #else
         // Scalar path

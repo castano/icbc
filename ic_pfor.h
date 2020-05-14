@@ -93,7 +93,7 @@ namespace ic {
 #define IC_STATIC_ASSERT(x) static_assert(x, #x)
 
 #if ((defined(_WIN32) || defined WIN32 || defined __NT__ || defined __WIN32__) && !defined __CYGWIN__)
-#define IC_OS_WINDOWS
+#define IC_OS_WINDOWS 1
 #endif
 #if (defined linux || defined __linux__)
 #define IC_OS_LINUX 1
@@ -382,9 +382,7 @@ static unsigned long __stdcall threadFunc(void * arg)
 {
     Thread * thread = (Thread *)arg;
     DWORD id = GetCurrentThreadId();
-#if !IC_OS_CYGWIN
-//    setThreadName(id, thread->name);
-#endif
+    setThreadName(id, thread->name);
     #ifdef IC_THREAD_NAME
     IC_THREAD_NAME(id, thread->name);
     #endif
