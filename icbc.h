@@ -439,6 +439,30 @@ ICBC_FORCEINLINE bool any(VMask m) {
 }
 
 
+#define REDUCE_MIN_INDEX
+inline int reduce_min_index(VFloat v) {
+
+    // First do an horizontal reduction.
+                                                                    // v = [ D C | B A ]
+    VFloat shuf = _mm_shuffle_ps(v, v, _MM_SHUFFLE(2, 3, 0, 1));    //     [ C D | A B ]
+    VFloat mins = _mm_min_ps(v, shuf);                              // mins = [ D+C C+D | B+A A+B ]
+    shuf        = _mm_movehl_ps(shuf, mins);                        //        [   C   D | D+C C+D ]  // let the compiler avoid a mov by reusing shuf
+    mins        = _mm_min_ss(mins, shuf);
+    mins =      _mm_shuffle_ps(mins, mins, _MM_SHUFFLE(0, 0, 0, 0));
+
+    // Then find the index.
+    uint mask = _mm_movemask_ps(v <= mins);
+
+#if __GNUC__
+    return __builtin_ctz(mask);
+#else
+    int index;
+    _BitScanForward(&index, mask);
+    return index;
+#endif
+}
+
+
 #elif ICBC_USE_SPMD == ICBC_AVX1 || ICBC_USE_SPMD == ICBC_AVX2
 
 #define VEC_SIZE 8
@@ -652,6 +676,26 @@ ICBC_FORCEINLINE bool any(VMask mask) {
     return mask.m != 0;
 }
 
+/*
+#define REDUCE_MIN_INDEX
+inline int reduce_min_index(VFloat v) {
+
+    // First do an horizontal reduction.
+    VFloat mins = vbroadcast(_mm512_reduce_min_ps(v));
+
+    // Then find the index.
+    uint mask = (v <= mins);
+
+#if __GNUC__
+    return __builtin_ctz(mask);
+#else
+    int index;
+    _BitScanForward(&index, mask);
+    return index;
+#endif
+}
+*/
+
 #elif ICBC_USE_SPMD == ICBC_NEON
 
 #define VEC_SIZE 4
@@ -782,7 +826,7 @@ inline int reduce_min_index(VFloat v) {
 
 #endif // ICBC_NEON
 
-#if !REDUCE_MIN_INDEX
+#ifndef REDUCE_MIN_INDEX
 inline int reduce_min_index(VFloat v) {
     // @@ Is there a better way to do this reduction?
     int min_idx = 0;
