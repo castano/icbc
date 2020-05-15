@@ -21,6 +21,7 @@ namespace icbc {
         Decoder_AMD = 2
     };
 
+    void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
     float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * block, Decoder decoder = Decoder_D3D10);
 
 }
@@ -60,7 +61,7 @@ namespace icbc {
 #endif
 
 #if ICBC_USE_SPMD == ICBC_NEON
-#define ICBC_USE_NEON_VTL 0        // @@ Not implemented yet.
+#define ICBC_USE_NEON_VTL 0
 #endif
 
 
@@ -90,10 +91,10 @@ namespace icbc {
 #endif
 
 
-// Some testing knobs:
+// Some experimental knobs:
 #define ICBC_FAST_CLUSTER_FIT 0     // This ignores input weights for a moderate speedup. (currently broken)
 #define ICBC_PERFECT_ROUND 0        // Enable perfect rounding in scalar code path only.
-#define ICBC_USE_SAT 1              // Use summed area tables.
+#define ICBC_USE_SAT 0              // Use summed area tables.
 
 #include <stdint.h>
 #include <stdlib.h> // abs
@@ -1376,19 +1377,19 @@ static void init_cluster_tables() {
 
 #if ICBC_USE_NEON_VTL
     for (int i = 0; i < 968; i++) {
-        int c0 = (s_threeCluster.c0) - 1;
+        int c0 = (s_fourCluster[i].c0) - 1;
         s_neon_vtl_index0_4[4 * i + 0] = uint8(c0 * 4 + 0);
         s_neon_vtl_index0_4[4 * i + 1] = uint8(c0 * 4 + 1);
         s_neon_vtl_index0_4[4 * i + 2] = uint8(c0 * 4 + 2);
         s_neon_vtl_index0_4[4 * i + 3] = uint8(c0 * 4 + 3);
 
-        int c1 = (s_threeCluster.c1) - 1;
+        int c1 = (s_fourCluster[i].c1) - 1;
         s_neon_vtl_index1_4[4 * i + 0] = uint8(c1 * 4 + 0);
         s_neon_vtl_index1_4[4 * i + 1] = uint8(c1 * 4 + 1);
         s_neon_vtl_index1_4[4 * i + 2] = uint8(c1 * 4 + 2);
         s_neon_vtl_index1_4[4 * i + 3] = uint8(c1 * 4 + 3);
 
-        int c2 = (s_threeCluster.c2) - 1;
+        int c2 = (s_fourCluster[i].c2) - 1;
         s_neon_vtl_index2_4[4 * i + 0] = uint8(c2 * 4 + 0);
         s_neon_vtl_index2_4[4 * i + 1] = uint8(c2 * 4 + 1);
         s_neon_vtl_index2_4[4 * i + 2] = uint8(c2 * 4 + 2);
@@ -1396,13 +1397,13 @@ static void init_cluster_tables() {
     }
 
     for (int i = 0; i < 152; i++) {
-        int c0 = (s_threeCluster.c0) - 1;
+        int c0 = (s_threeCluster[i].c0) - 1;
         s_neon_vtl_index0_3[4 * i + 0] = uint8(c0 * 4 + 0);
         s_neon_vtl_index0_3[4 * i + 1] = uint8(c0 * 4 + 1);
         s_neon_vtl_index0_3[4 * i + 2] = uint8(c0 * 4 + 2);
         s_neon_vtl_index0_3[4 * i + 3] = uint8(c0 * 4 + 3);
 
-        int c1 = (s_threeCluster.c1) - 1;
+        int c1 = (s_threeCluster[i].c1) - 1;
         s_neon_vtl_index1_3[4 * i + 0] = uint8(c1 * 4 + 0);
         s_neon_vtl_index1_3[4 * i + 1] = uint8(c1 * 4 + 1);
         s_neon_vtl_index1_3[4 * i + 2] = uint8(c1 * 4 + 2);
@@ -1653,10 +1654,10 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         uint8x16_t idx1 = (uint8x16_t &)s_neon_vtl_index1_3[4*i];
 
         if (count <= 4) {
-            uint8x16_t rsat1 = vld1q_u8((u8*)sat.r);
-            uint8x16_t gsat1 = vld1q_u8((u8*)sat.g);
-            uint8x16_t bsat1 = vld1q_u8((u8*)sat.b);
-            uint8x16_t wsat1 = vld1q_u8((u8*)sat.w);
+            uint8x16_t rsat1 = vld1q_u8((uint8*)sat.r);
+            uint8x16_t gsat1 = vld1q_u8((uint8*)sat.g);
+            uint8x16_t bsat1 = vld1q_u8((uint8*)sat.b);
+            uint8x16_t wsat1 = vld1q_u8((uint8*)sat.w);
 
             x0.x = vreinterpretq_f32_u8(vqtbl1q_u8(rsat1, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl1q_u8(gsat1, idx0));
@@ -1669,10 +1670,10 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             w1   = vreinterpretq_f32_u8(vqtbl1q_u8(wsat1, idx1));
         }
         else if (count <= 8) {
-            uint8x16x2_t rsat2 = vld2q_u8((u8*)sat.r);
-            uint8x16x2_t gsat2 = vld2q_u8((u8*)sat.g);
-            uint8x16x2_t bsat2 = vld2q_u8((u8*)sat.b);
-            uint8x16x2_t wsat2 = vld2q_u8((u8*)sat.w);
+            uint8x16x2_t rsat2 = vld2q_u8((uint8*)sat.r);
+            uint8x16x2_t gsat2 = vld2q_u8((uint8*)sat.g);
+            uint8x16x2_t bsat2 = vld2q_u8((uint8*)sat.b);
+            uint8x16x2_t wsat2 = vld2q_u8((uint8*)sat.w);
 
             x0.x = vreinterpretq_f32_u8(vqtbl2q_u8(rsat2, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl2q_u8(gsat2, idx0));
@@ -1685,10 +1686,10 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             w1   = vreinterpretq_f32_u8(vqtbl2q_u8(wsat2, idx1));
         }
         else if (count <= 12) {
-            uint8x16x3_t rsat3 = vld3q_u8((u8*)sat.r);
-            uint8x16x3_t gsat3 = vld3q_u8((u8*)sat.g);
-            uint8x16x3_t bsat3 = vld3q_u8((u8*)sat.b);
-            uint8x16x3_t wsat3 = vld3q_u8((u8*)sat.w);
+            uint8x16x3_t rsat3 = vld3q_u8((uint8*)sat.r);
+            uint8x16x3_t gsat3 = vld3q_u8((uint8*)sat.g);
+            uint8x16x3_t bsat3 = vld3q_u8((uint8*)sat.b);
+            uint8x16x3_t wsat3 = vld3q_u8((uint8*)sat.w);
 
             x0.x = vreinterpretq_f32_u8(vqtbl3q_u8(rsat3, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl3q_u8(gsat3, idx0));
@@ -1702,10 +1703,10 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         }
         else {
             // Load SAT.
-            uint8x16x4_t rsat4 = vld4q_u8((u8*)sat.r);
-            uint8x16x4_t gsat4 = vld4q_u8((u8*)sat.g);
-            uint8x16x4_t bsat4 = vld4q_u8((u8*)sat.b);
-            uint8x16x4_t wsat4 = vld4q_u8((u8*)sat.w);
+            uint8x16x4_t rsat4 = vld4q_u8((uint8*)sat.r);
+            uint8x16x4_t gsat4 = vld4q_u8((uint8*)sat.g);
+            uint8x16x4_t bsat4 = vld4q_u8((uint8*)sat.b);
+            uint8x16x4_t wsat4 = vld4q_u8((uint8*)sat.w);
 
             x0.x = vreinterpretq_f32_u8(vqtbl4q_u8(rsat4, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl4q_u8(gsat4, idx0));
@@ -2143,10 +2144,10 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         uint8x16_t idx2 = (uint8x16_t &)s_neon_vtl_index2_4[4*i];
 
         if (count <= 4) {
-            uint8x16_t rsat1 = vld1q_u8((u8*)sat.r);
-            uint8x16_t gsat1 = vld1q_u8((u8*)sat.g);
-            uint8x16_t bsat1 = vld1q_u8((u8*)sat.b);
-            uint8x16_t wsat1 = vld1q_u8((u8*)sat.w);
+            uint8x16_t rsat1 = vld1q_u8((uint8*)sat.r);
+            uint8x16_t gsat1 = vld1q_u8((uint8*)sat.g);
+            uint8x16_t bsat1 = vld1q_u8((uint8*)sat.b);
+            uint8x16_t wsat1 = vld1q_u8((uint8*)sat.w);
 
             x0.x = vreinterpretq_f32_u8(vqtbl1q_u8(rsat1, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl1q_u8(gsat1, idx0));
@@ -2164,10 +2165,10 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             w2   = vreinterpretq_f32_u8(vqtbl1q_u8(wsat1, idx2));
         }
         else if (count <= 8) {
-            uint8x16x2_t rsat2 = vld2q_u8((u8*)sat.r);
-            uint8x16x2_t gsat2 = vld2q_u8((u8*)sat.g);
-            uint8x16x2_t bsat2 = vld2q_u8((u8*)sat.b);
-            uint8x16x2_t wsat2 = vld2q_u8((u8*)sat.w);
+            uint8x16x2_t rsat2 = vld2q_u8((uint8*)sat.r);
+            uint8x16x2_t gsat2 = vld2q_u8((uint8*)sat.g);
+            uint8x16x2_t bsat2 = vld2q_u8((uint8*)sat.b);
+            uint8x16x2_t wsat2 = vld2q_u8((uint8*)sat.w);
 
             x0.x = vreinterpretq_f32_u8(vqtbl2q_u8(rsat2, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl2q_u8(gsat2, idx0));
@@ -2185,10 +2186,10 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             w2   = vreinterpretq_f32_u8(vqtbl2q_u8(wsat2, idx2));
         }
         else if (count <= 12) {
-            uint8x16x3_t rsat3 = vld3q_u8((u8*)sat.r);
-            uint8x16x3_t gsat3 = vld3q_u8((u8*)sat.g);
-            uint8x16x3_t bsat3 = vld3q_u8((u8*)sat.b);
-            uint8x16x3_t wsat3 = vld3q_u8((u8*)sat.w);
+            uint8x16x3_t rsat3 = vld3q_u8((uint8*)sat.r);
+            uint8x16x3_t gsat3 = vld3q_u8((uint8*)sat.g);
+            uint8x16x3_t bsat3 = vld3q_u8((uint8*)sat.b);
+            uint8x16x3_t wsat3 = vld3q_u8((uint8*)sat.w);
 
             x0.x = vreinterpretq_f32_u8(vqtbl3q_u8(rsat3, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl3q_u8(gsat3, idx0));
@@ -2206,10 +2207,10 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             w2   = vreinterpretq_f32_u8(vqtbl3q_u8(wsat3, idx2));
         }
         else {
-            uint8x16x4_t rsat4 = vld4q_u8((u8*)sat.r);
-            uint8x16x4_t gsat4 = vld4q_u8((u8*)sat.g);
-            uint8x16x4_t bsat4 = vld4q_u8((u8*)sat.b);
-            uint8x16x4_t wsat4 = vld4q_u8((u8*)sat.w);
+            uint8x16x4_t rsat4 = vld4q_u8((uint8*)sat.r);
+            uint8x16x4_t gsat4 = vld4q_u8((uint8*)sat.g);
+            uint8x16x4_t bsat4 = vld4q_u8((uint8*)sat.b);
+            uint8x16x4_t wsat4 = vld4q_u8((uint8*)sat.w);
 
             x0.x = vreinterpretq_f32_u8(vqtbl4q_u8(rsat4, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl4q_u8(gsat4, idx0));
@@ -2797,6 +2798,29 @@ static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
 
     for (int i = 0; i < 4; i++) {
         palette[i] = color_to_vector3(palette32[i]);
+    }
+}
+
+void decode_dxt1(const BlockDXT1 * block, unsigned char rgba_block[16 * 4], Decoder decoder)
+{
+    Color32 palette[4];
+    if (decoder == Decoder_NVIDIA) {
+        evaluate_palette_nv(block->col0, block->col1, palette);
+    }
+    else if (decoder == Decoder_AMD) {
+        evaluate_palette_amd(block->col0, block->col1, palette);
+    }
+    else {
+        evaluate_palette(block->col0, block->col1, palette);
+    }
+
+    for (int i = 0; i < 16; i++) {
+        int index = (block->indices >> (2 * i)) & 3;
+        Color32 c = palette[index];
+        rgba_block[4 * i + 0] = c.r;
+        rgba_block[4 * i + 1] = c.g;
+        rgba_block[4 * i + 2] = c.b;
+        rgba_block[4 * i + 3] = c.a;
     }
 }
 
