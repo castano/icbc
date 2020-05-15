@@ -18,7 +18,7 @@
 
 namespace ic {
 
-    // Init and destroy this library.
+    // Init and destroy this library. Returns number of threads.
     int init_pfor(int worker_count = 0, bool use_calling_thread = true);
     void shut_pfor();
 
@@ -126,7 +126,6 @@ namespace ic {
 
 #if !IC_OS_WINDOWS
 #include <pthread.h>
-//#include <sys/types.h>
 #include <unistd.h> // sysconf
 #endif
 
