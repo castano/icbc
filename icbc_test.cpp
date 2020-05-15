@@ -1,13 +1,15 @@
 // Compilation instructions:
-// $ g++ icbc_test.cpp -O3 -mavx2
+// $ g++ icbc_test.cpp -O3 -mavx2 -lpthread -std=c+=11
 // > cl icbc_test.cpp /O2 /arch:AVX2
 
 // Enable one of these:
+//#define ICBC_USE_SPMD 0         // FLOAT
 //#define ICBC_USE_SPMD 1         // SSE2
 //#define ICBC_USE_SPMD 2         // SSE4.1
 //#define ICBC_USE_SPMD 3         // AVX
 #define ICBC_USE_SPMD 4         // AVX2
 //#define ICBC_USE_SPMD 5         // AVX512
+//#define ICBC_USE_SPMD -1        // NEON
 
 #define ICBC_IMPLEMENTATION
 #include "icbc.h"
@@ -73,10 +75,10 @@ inline double timer_frequency() {
 }
 inline u64 timer_time() {
     LARGE_INTEGER qpc;
-    QueryPerformanceCounter(&qpc);    
+    QueryPerformanceCounter(&qpc);
     return qpc.QuadPart;
 }
-#else
+#elif defined(__APPLE__) || defined(__MACH__)
 #include <mach/mach_time.h>
 inline double timer_frequency() {
     mach_timebase_info_data_t mach_timebase;
@@ -85,6 +87,18 @@ inline double timer_frequency() {
 }
 inline u64 timer_time() {
     return mach_absolute_time();
+}
+#else
+#include <time.h>
+inline double timer_frequency() {
+    return 1e9;
+}
+inline u64 timer_time() {
+    struct timespec ts;
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
+        return -1;
+    }
+    return u64(ts.tv_sec) * 1000000000 + ts.tv_nsec;
 }
 #endif
 
@@ -241,6 +255,22 @@ static bool output_dxt_ktx(u32 w, u32 h, const u8* data, const char * filename) 
     return true;
 }
 
+static bool output_dxt_png(u32 w, u32 h, const u8* data, const char * filename) {
+
+    FILE * fp = fopen(filename, "wb");
+    if (fp == nullptr) return false;
+
+    // Write header:
+    //fwrite(&ktx, sizeof(ktx), 1, fp);
+    //fwrite(&image_size, sizeof(u32), 1, fp);
+
+    // Write dxt data:
+    //fwrite(data, image_size, 1, fp);
+
+    fclose(fp);
+
+    return true;
+}
 
 
 ////////////////////////////////
@@ -268,6 +298,7 @@ static float mse_to_psnr(float mse) {
 // Input options:
 bool output_dds = false;
 bool output_ktx = false;
+bool output_png = false;
 int repeat_count = 1;
 
 // Output stats:
@@ -329,6 +360,7 @@ bool encode_image(const char * input_filename) {
 
         timer.start();
 
+        //for (int b = 0; b < block_count; b++) {
         //ic::pfor(block_count, 32, [=](int b) {
         ic_pfor(b, block_count, 32) {
             float input_colors[16 * 4];
@@ -358,6 +390,10 @@ bool encode_image(const char * input_filename) {
     if (output_ktx) {
         snprintf(output_filename, 1024, "%.*s_bc1.ktx", int(strchr(input_filename, '.')-input_filename), input_filename);
         output_dxt_ktx(bw, bh, block_data, output_filename);
+    }
+    if (output_png) {
+        snprintf(output_filename, 1024, "%.*s_bc1.png", int(strchr(input_filename, '.')-input_filename), input_filename);
+        output_dxt_png(bw, bh, block_data, output_filename);
     }
 
     total_block_count += block_count;
@@ -409,6 +445,9 @@ int main(int argc, char * argv[]) {
         }
         else if (strcmp(argv[i], "-ktx") == 0) {
             output_ktx = true;
+        }
+        else if (strcmp(argv[i], "-png") == 0) {
+            output_png = true;
         }
         else if (atoi(argv[i])) {
             repeat_count = atoi(argv[i]);
