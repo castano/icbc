@@ -294,6 +294,18 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 #define ICBC_FORCEINLINE __forceinline
 #endif
 
+
+ICBC_FORCEINLINE int ctz(uint mask) {
+#if __GNUC__
+    return __builtin_ctz(mask);
+#else
+    int index;
+    _BitScanForward(&index, mask);
+    return index;
+#endif    
+}
+
+
 #if ICBC_USE_SPMD == ICBC_FLOAT  // Purely scalar version.
 
 #define VEC_SIZE 1
@@ -313,6 +325,9 @@ ICBC_FORCEINLINE VFloat lane_id() { return 0; }
 ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) { return mask ? b : a; }
 ICBC_FORCEINLINE bool all(VMask m) { return m; }
 ICBC_FORCEINLINE bool any(VMask m) { return m; }
+
+#define REDUCE_MIN_INDEX
+ICBC_FORCEINLINE int reduce_min_index(VFloat v) { return 0; }
 
 
 #elif ICBC_USE_SPMD == ICBC_SSE2 || ICBC_USE_SPMD == ICBC_SSE41
@@ -442,8 +457,7 @@ ICBC_FORCEINLINE bool any(VMask m) {
 #define REDUCE_MIN_INDEX
 inline int reduce_min_index(VFloat v) {
 
-    // First do an horizontal reduction.
-                                                                    // v = [ D C | B A ]
+    // First do an horizontal reduction.                            // v = [ D C | B A ]
     VFloat shuf = _mm_shuffle_ps(v, v, _MM_SHUFFLE(2, 3, 0, 1));    //     [ C D | A B ]
     VFloat mins = _mm_min_ps(v, shuf);                              // mins = [ D+C C+D | B+A A+B ]
     shuf        = _mm_movehl_ps(shuf, mins);                        //        [   C   D | D+C C+D ]  // let the compiler avoid a mov by reusing shuf
@@ -452,14 +466,7 @@ inline int reduce_min_index(VFloat v) {
 
     // Then find the index.
     uint mask = _mm_movemask_ps(v <= mins);
-
-#if __GNUC__
-    return __builtin_ctz(mask);
-#else
-    int index;
-    _BitScanForward(&index, mask);
-    return index;
-#endif
+    return ctz(mask);
 }
 
 
@@ -574,6 +581,27 @@ ICBC_FORCEINLINE bool any(VMask m) {
     return _mm256_testz_ps(m, m) == 0;
 }
 
+/*
+#define REDUCE_MIN_INDEX
+inline int reduce_min_index(VFloat v) {
+
+    __m128 vlow  = _mm256_castps256_ps128(v);
+    __m128 vhigh = _mm256_extractf128_ps(v, 1);
+           vlow  = _mm_min_ps(vlow, vhigh);
+
+    // First do an horizontal reduction.                                // v = [ D C | B A ]                                                                    
+    __m128 shuf = _mm_shuffle_ps(vlow, vlow, _MM_SHUFFLE(2, 3, 0, 1));  //     [ C D | A B ]
+    __m128 mins = _mm_min_ps(vlow, shuf);                            // mins = [ D+C C+D | B+A A+B ]
+    shuf        = _mm_movehl_ps(shuf, mins);                         //        [   C   D | D+C C+D ]
+    mins        = _mm_min_ss(mins, shuf);
+
+    VFloat vmin = _mm256_permute_ps(_mm256_zextps128_ps256(mins), 0); // _MM256_PERMUTE(0, 0, 0, 0, 0, 0, 0, 0)
+
+    // Then find the index.
+    uint mask = _mm256_movemask_ps(v <= vmin);
+    return ctz(mask);
+}
+*/
 
 #elif ICBC_USE_SPMD == ICBC_AVX512
 
