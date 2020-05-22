@@ -370,9 +370,8 @@ ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
 
 ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 #if ICBC_USE_RCP
-    VFloat res = _mm_rcp_ps(a);
-    auto muls = _mm_mul_ps(a, _mm_mul_ps(res, res));
-    return _mm_sub_ps(_mm_add_ps(res, res), muls);
+    VFloat r = _mm_rcp_ps(a);
+    return _mm_mul_ps(r, _mm_sub_ps(vbroadcast(2.0f), _mm_mul_ps(r, a)));   // r * (2 - r * a)
 #else
     return _mm_div_ps(vbroadcast(1.0f), a);
 #endif
@@ -518,9 +517,18 @@ ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
 
 ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 #if ICBC_USE_RCP
-    __m256 res = _mm256_rcp_ps(a);
-    __m256 muls = _mm256_mul_ps(a, _mm256_mul_ps(res, res));
-    return _mm256_sub_ps(_mm256_add_ps(res, res), muls);
+    #if ICBC_USE_SPMD == ICBC_AVX512
+        VFloat r = _mm256_rcp14_ps(a);
+    #else
+        VFloat r = _mm256_rcp_ps(a);
+    #endif
+
+    // r = r * (2 - r * a)
+    #if ICBC_USE_FMA == 3 || ICBC_AVX2
+        return _mm256_mul_ps(r, _mm256_fnmadd_ps(r, a, vbroadcast(2.0f)));
+    #else
+        return _mm256_mul_ps(r, _mm256_sub_ps(vbroadcast(2.0f), _mm256_mul_ps(r, a)));
+    #endif
 #else
     return _mm256_div_ps(vbroadcast(1.0f), a);
 #endif
@@ -630,8 +638,14 @@ ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
 }
 
 ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
-    // @@ Use an aproximation?
+#if ICBC_USE_RCP
+    VFloat r = _mm512_rcp14_ps(a);
+
+    // r = r * (2 - r * a)
+    return _mm512_mul_ps(r, _mm512_fnmadd_ps(r, a, vbroadcast(2.0f)));
+#else
     return _mm512_div_ps(vbroadcast(1.0f), a);
+#endif
 }
 
 // a*b+c
