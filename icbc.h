@@ -848,13 +848,17 @@ ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
     return vbslq_f32(mask, b, a);
 }
 
-/*ICBC_FORCEINLINE bool all(VMask mask) {
-    // @@
+ICBC_FORCEINLINE bool all(VMask mask) {
+    uint32x2_t m2 = vpmin_u32(vget_low_u32(mask), vget_high_u32(mask));
+    uint32x2_t m1 = vpmin_u32(m2, m2);
+    return m1[0] != 0;
 }
 
 ICBC_FORCEINLINE bool any(VMask mask) {
-    // @@
-}*/
+    uint32x2_t m2 = vpmax_u32(vget_low_u32(mask), vget_high_u32(mask));
+    uint32x2_t m1 = vpmax_u32(m2, m2);
+    return m1[0] != 0;
+}
 
 /*
 #define REDUCE_MIN_INDEX
