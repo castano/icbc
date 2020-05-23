@@ -1,5 +1,5 @@
-// icbc.h v1.02
-// A High Quality BC1 Encoder by Ignacio Castano <castano@gmail.com>.
+// icbc.h v1.03
+// A High Quality SIMD BC1 Encoder by Ignacio Castano <castano@gmail.com>.
 //
 // LICENSE:
 //  MIT license at the end of this file.
@@ -11,9 +11,28 @@ namespace icbc {
 
     void init_dxt1();
 
-    float compress_dxt1(const float input_colors[16 * 4], const float input_weights[16], const float color_weights[3], bool three_color_mode, bool hq, void * output);
+    enum Quality {
+        Quality_Level1,  // Box fit + least squares fit.
+        Quality_Level2,  // Cluster fit 4, threshold = 24.
+        Quality_Level3,  // Cluster fit 4, threshold = 32.
+        Quality_Level4,  // Cluster fit 4, threshold = 48.
+        Quality_Level5,  // Cluster fit 4, threshold = 64.
+        Quality_Level6,  // Cluster fit 4, threshold = 96.
+        Quality_Level7,  // Cluster fit 4, threshold = 128.
+        Quality_Level8,  // Cluster fit 4+3, threshold = 256.
+        Quality_Level9,  // Cluster fit 4+3, threshold = 256 + Refinement.
+
+        Quality_Fast = Quality_Level1,
+        Quality_Default = Quality_Level8,
+        Quality_Max = Quality_Level9,
+    };
+
+    float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool three_color_mode, bool three_color_black, void * output);
+
+    // @@ Is there any difference between this and compress_dxt1(Quality_Level0) ?
     float compress_dxt1_fast(const float input_colors[16 * 4], const float input_weights[16], const float color_weights[3], void * output);
     void compress_dxt1_fast(const unsigned char input_colors[16 * 4], void * output);
+
 
     enum Decoder {
         Decoder_D3D10 = 0,
@@ -30,7 +49,7 @@ namespace icbc {
 
 #ifdef ICBC_IMPLEMENTATION
 
-// Instruction level support must be chosen at compile time setting ICBC_USE_SPMD to one of these values:
+// Instruction level support must be chosen at compile time setting ICBC_SIMD to one of these values:
 #define ICBC_FLOAT  0
 #define ICBC_SSE2   1
 #define ICBC_SSE41  2
@@ -38,29 +57,37 @@ namespace icbc {
 #define ICBC_AVX2   4
 #define ICBC_AVX512 5
 #define ICBC_NEON   -1
+#define ICBC_VMX    -2
 
-// AVX does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
-//#define ICBC_USE_FMA 3
-//#define ICBC_USE_FMA 4
-
-// Apparently rcp is not deterministic (different precision on Intel and AMD), enable if you don't care about that for small performance boost.
-//#define ICBC_USE_RCP 1
-
-#ifndef ICBC_USE_SPMD
-#define ICBC_USE_SPMD 5          // SIMD version. (FLOAT=0, SSE2=1, SSE41=2, AVX1=3, AVX2=4, AVX512=5, NEON=-1)
+// SIMD version. (FLOAT=0, SSE2=1, SSE41=2, AVX1=3, AVX2=4, AVX512=5, NEON=-1, VMX=-2)
+#ifndef ICBC_SIMD
+#if _M_ARM
+#define ICBC_SIMD -1          
+#else
+#define ICBC_SIMD 5
+#endif
 #endif
 
-#if ICBC_USE_SPMD == ICBC_AVX2
+// AVX1 does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
+#ifndef ICBC_USE_FMA
+//#define ICBC_USE_FMA 3
+//#define ICBC_USE_FMA 4
+#endif
+
+// Apparently rcp is not deterministic (different precision on Intel and AMD), enable if you don't care about that for a small performance boost.
+#define ICBC_USE_RCP 1
+
+#if ICBC_SIMD == ICBC_AVX2
 #define ICBC_USE_AVX2_PERMUTE2 1    // Using permutevar8x32 and bitops.
 #define ICBC_USE_AVX2_PERMUTE 0     // Using blendv and permutevar8x32.
 #define ICBC_USE_AVX2_GATHER 0      // Using gathers for SAT lookup.
 #endif
 
-#if ICBC_USE_SPMD == ICBC_AVX512
+#if ICBC_SIMD == ICBC_AVX512
 #define ICBC_USE_AVX512_PERMUTE 1
 #endif
 
-#if ICBC_USE_SPMD == ICBC_NEON
+#if ICBC_SIMD == ICBC_NEON
 #define ICBC_USE_NEON_VTL 0
 #endif
 
@@ -69,32 +96,35 @@ namespace icbc {
 #define ICBC_DECODER 0       // 0 = d3d10, 1 = nvidia, 2 = amd
 #endif
 
+// Some experimental knobs:
+#define ICBC_FAST_CLUSTER_FIT 0     // This ignores input weights for a moderate speedup.
+#define ICBC_PERFECT_ROUND 0        // Enable perfect rounding in scalar code path only.
 
-#if ICBC_USE_SPMD >= ICBC_SSE2
+
+#if ICBC_SIMD >= ICBC_SSE2
 #include <emmintrin.h>
 #endif
 
-#if ICBC_USE_SPMD >= ICBC_SSE41
+#if ICBC_SIMD >= ICBC_SSE41
 #include <smmintrin.h>
 #endif
 
-#if ICBC_USE_SPMD >= ICBC_AVX1
+#if ICBC_SIMD >= ICBC_AVX1
 #include <immintrin.h>
 #endif
 
-#if ICBC_USE_SPMD >= ICBC_AVX512 && _MSC_VER
+#if ICBC_SIMD >= ICBC_AVX512 && _MSC_VER
 #include <zmmintrin.h>
 #endif
 
-#if ICBC_USE_SPMD == ICBC_NEON
+#if ICBC_SIMD == ICBC_NEON
 #include <arm_neon.h>
 #endif
 
+#if ICBC_SIMD == ICBC_VMX
+#include <altivec.h>
+#endif
 
-// Some experimental knobs:
-#define ICBC_FAST_CLUSTER_FIT 0     // This ignores input weights for a moderate speedup. (currently broken)
-#define ICBC_PERFECT_ROUND 0        // Enable perfect rounding in scalar code path only.
-#define ICBC_USE_SAT 0              // Use summed area tables.
 
 #include <stdint.h>
 #include <stdlib.h> // abs
@@ -278,7 +308,7 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
-// SPMD
+// SIMD
 
 #ifndef ICBC_ALIGN_16
 #if __GNUC__
@@ -295,18 +325,19 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 #endif
 
 
+// Count trailing zeros (BSR).
 ICBC_FORCEINLINE int ctz(uint mask) {
 #if __GNUC__
     return __builtin_ctz(mask);
 #else
-    int index;
-    _BitScanForward(&index, mask);
-    return index;
+    unsigned long index;
+    _BitScanReverse(&index, mask);
+    return (int)index;
 #endif    
 }
 
 
-#if ICBC_USE_SPMD == ICBC_FLOAT  // Purely scalar version.
+#if ICBC_SIMD == ICBC_FLOAT  // Purely scalar version.
 
 #define VEC_SIZE 1
 
@@ -318,19 +349,20 @@ ICBC_FORCEINLINE VFloat vzero() { return 0.0f; }
 ICBC_FORCEINLINE VFloat vbroadcast(float x) { return x; }
 ICBC_FORCEINLINE VFloat vload(const float * ptr) { return *ptr; }
 ICBC_FORCEINLINE VFloat vrcp(VFloat a) { return 1.0f / a; }
-ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) { return a * b + c; }
+ICBC_FORCEINLINE VFloat vmadd(VFloat a, VFloat b, VFloat c) { return a * b + c; }
+ICBC_FORCEINLINE VFloat vmsub(VFloat a, VFloat b, VFloat c) { return a * b - c; }
+ICBC_FORCEINLINE VFloat vm2sub(VFloat a, VFloat b, VFloat c, VFloat d) { return a * b - c * d; }
 ICBC_FORCEINLINE VFloat vsaturate(VFloat a) { return min(max(a, 0.0f), 1.0f); }
 ICBC_FORCEINLINE VFloat vround(VFloat a) { return float(int(a + 0.5f)); }
 ICBC_FORCEINLINE VFloat lane_id() { return 0; }
 ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) { return mask ? b : a; }
 ICBC_FORCEINLINE bool all(VMask m) { return m; }
 ICBC_FORCEINLINE bool any(VMask m) { return m; }
-
-#define REDUCE_MIN_INDEX
+ICBC_FORCEINLINE uint mask(VMask m) { return (uint)m; }
 ICBC_FORCEINLINE int reduce_min_index(VFloat v) { return 0; }
+ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d) {}
 
-
-#elif ICBC_USE_SPMD == ICBC_SSE2 || ICBC_USE_SPMD == ICBC_SSE41
+#elif ICBC_SIMD == ICBC_SSE2 || ICBC_SIMD == ICBC_SSE41
 
 #define VEC_SIZE 4
 
@@ -393,8 +425,16 @@ ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 }
 
 // a*b+c
-ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) {
+ICBC_FORCEINLINE VFloat vmadd(VFloat a, VFloat b, VFloat c) {
     return a * b + c;
+}
+
+ICBC_FORCEINLINE VFloat vmsub(VFloat a, VFloat b, VFloat c) {
+    return a * b - c;
+}
+
+ICBC_FORCEINLINE VFloat vm2sub(VFloat a, VFloat b, VFloat c, VFloat d) {
+    return a * b - c * d;
 }
 
 ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
@@ -404,7 +444,7 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
 }
 
 ICBC_FORCEINLINE VFloat vround(VFloat a) {
-#if ICBC_USE_SPMD == ICBC_SSE41
+#if ICBC_SIMD == ICBC_SSE41
     return _mm_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 #else
     // @@ Assumes a is positive and small.
@@ -413,7 +453,7 @@ ICBC_FORCEINLINE VFloat vround(VFloat a) {
 }
 
 ICBC_FORCEINLINE VFloat vtruncate(VFloat a) {
-#if ICBC_USE_SPMD == ICBC_SSE41
+#if ICBC_SIMD == ICBC_SSE41
     return _mm_round_ps(a, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC);
 #else
     return _mm_cvtepi32_ps(_mm_cvttps_epi32(a));
@@ -435,7 +475,7 @@ ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return _mm_xor_ps(A, B); }
 
 // mask ? b : a
 ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
-#if ICBC_USE_SPMD == ICBC_SSE41
+#if ICBC_SIMD == ICBC_SSE41
     return _mm_blendv_ps(a, b, mask);
 #else
     return _mm_or_ps(_mm_andnot_ps(mask, a), _mm_and_ps(mask, b));
@@ -452,9 +492,11 @@ ICBC_FORCEINLINE bool any(VMask m) {
     return value != 0;
 }
 
+ICBC_FORCEINLINE uint mask(VMask m) {
+    return (uint)_mm_movemask_ps(m);
+}
 
-#define REDUCE_MIN_INDEX
-inline int reduce_min_index(VFloat v) {
+ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
 
     // First do an horizontal reduction.                            // v = [ D C | B A ]
     VFloat shuf = _mm_shuffle_ps(v, v, _MM_SHUFFLE(2, 3, 0, 1));    //     [ C D | A B ]
@@ -468,8 +510,20 @@ inline int reduce_min_index(VFloat v) {
     return ctz(mask);
 }
 
+// https://gcc.gnu.org/legacy-ml/gcc-patches/2005-10/msg00324.html
+ICBC_FORCEINLINE void vtranspose4(VFloat & r0, VFloat & r1, VFloat & r2, VFloat & r3) {
+    VFloat t0 = _mm_unpacklo_ps(r0, r1);
+    VFloat t1 = _mm_unpacklo_ps(r2, r3);
+    VFloat t2 = _mm_unpackhi_ps(r0, r1);
+    VFloat t3 = _mm_unpackhi_ps(r2, r3);
+    r0 = _mm_movelh_ps(t0, t1);
+    r1 = _mm_movehl_ps(t1, t0);
+    r2 = _mm_movelh_ps(t2, t3);
+    r3 = _mm_movehl_ps(t3, t2);
+}
 
-#elif ICBC_USE_SPMD == ICBC_AVX1 || ICBC_USE_SPMD == ICBC_AVX2
+
+#elif ICBC_SIMD == ICBC_AVX1 || ICBC_SIMD == ICBC_AVX2
 
 #define VEC_SIZE 8
 
@@ -542,14 +596,28 @@ ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 }
 
 // a*b+c
-ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) {
-#if ICBC_USE_FMA == 3
+ICBC_FORCEINLINE VFloat vmadd(VFloat a, VFloat b, VFloat c) {
+#if ICBC_USE_FMA == 3 || ICBC_SIMD == ICBC_AVX2
     return _mm256_fmadd_ps(a, b, c);
 #elif ICBC_USE_FMA == 4
     return _mm256_macc_ps(a, b, c);
 #else
     return ((a * b) + c);
 #endif
+}
+
+ICBC_FORCEINLINE VFloat vmsub(VFloat a, VFloat b, VFloat c) {
+#if ICBC_USE_FMA == 3 || ICBC_SIMD == ICBC_AVX2
+    return _mm256_fmsub_ps(a, b, c);
+#elif ICBC_USE_FMA == 4
+    return _mm256_msub_ps(a, b, c);
+#else
+    return ((a * b) - c);
+#endif
+}
+
+ICBC_FORCEINLINE VFloat vm2sub(VFloat a, VFloat b, VFloat c, VFloat d) { 
+    return vmsub(a, b, c * d);
 }
 
 ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
@@ -589,9 +657,11 @@ ICBC_FORCEINLINE bool any(VMask m) {
     return _mm256_testz_ps(m, m) == 0;
 }
 
-/*
-#define REDUCE_MIN_INDEX
-inline int reduce_min_index(VFloat v) {
+ICBC_FORCEINLINE uint mask(VMask m) {
+    return (uint)_mm256_movemask_ps(m);
+}
+
+ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
 
     __m128 vlow  = _mm256_castps256_ps128(v);
     __m128 vhigh = _mm256_extractf128_ps(v, 1);
@@ -603,15 +673,30 @@ inline int reduce_min_index(VFloat v) {
     shuf        = _mm_movehl_ps(shuf, mins);                         //        [   C   D | D+C C+D ]
     mins        = _mm_min_ss(mins, shuf);
 
-    VFloat vmin = _mm256_permute_ps(_mm256_zextps128_ps256(mins), 0); // _MM256_PERMUTE(0, 0, 0, 0, 0, 0, 0, 0)
+    VFloat vmin = _mm256_permute_ps(_mm256_set_m128(mins, mins), 0); // _MM256_PERMUTE(0, 0, 0, 0, 0, 0, 0, 0)
 
     // Then find the index.
     uint mask = _mm256_movemask_ps(v <= vmin);
     return ctz(mask);
 }
-*/
 
-#elif ICBC_USE_SPMD == ICBC_AVX512
+// AoS to SoA
+ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d) {
+    VFloat r0 = _mm256_unpacklo_ps(a, b);
+    VFloat r1 = _mm256_unpacklo_ps(c, d);
+    VFloat r2 = _mm256_permute2f128_ps(r0, r1, 0x20);
+    VFloat r3 = _mm256_permute2f128_ps(r0, r1, 0x31);
+    r0 = _mm256_unpackhi_ps(a, b);
+    r1 = _mm256_unpackhi_ps(c, d);
+    a = _mm256_unpacklo_ps(r2, r3);
+    b = _mm256_unpackhi_ps(r2, r3);
+    r2 = _mm256_permute2f128_ps(r0, r1, 0x20);
+    r3 = _mm256_permute2f128_ps(r0, r1, 0x31);
+    c = _mm256_unpacklo_ps(r2, r3);
+    d = _mm256_unpackhi_ps(r2, r3);
+}
+
+#elif ICBC_SIMD == ICBC_AVX512
 
 #define VEC_SIZE 16
 
@@ -626,6 +711,7 @@ union VFloat {
 };
 #else
 using VFloat = __m512;
+using VInt = __m512i;
 #endif
 struct VMask { __mmask16 m; };
 
@@ -677,8 +763,16 @@ ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 }
 
 // a*b+c
-ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) {
+ICBC_FORCEINLINE VFloat vmadd(VFloat a, VFloat b, VFloat c) {
     return _mm512_fmadd_ps(a, b, c);
+}
+
+ICBC_FORCEINLINE VFloat vmsub(VFloat a, VFloat b, VFloat c) {
+    return _mm512_fmsub_ps(a, b, c);
+}
+
+ICBC_FORCEINLINE VFloat vm2sub(VFloat a, VFloat b, VFloat c, VFloat d) {
+    return vmsub(a, b, c * d);
 }
 
 ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
@@ -718,27 +812,24 @@ ICBC_FORCEINLINE bool any(VMask mask) {
     return mask.m != 0;
 }
 
-/*
-#define REDUCE_MIN_INDEX
-inline int reduce_min_index(VFloat v) {
+ICBC_FORCEINLINE uint mask(VMask mask) {
+    return mask.m;
+}
+
+ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
 
     // First do an horizontal reduction.
-    VFloat mins = vbroadcast(_mm512_reduce_min_ps(v));
+    VFloat vmin = vbroadcast(_mm512_reduce_min_ps(v));
 
     // Then find the index.
-    uint mask = (v <= mins);
-
-#if __GNUC__
-    return __builtin_ctz(mask);
-#else
-    int index;
-    _BitScanForward(&index, mask);
-    return index;
-#endif
+    VMask mask = (v <= vmin);
+    return ctz(mask.m);
 }
-*/
 
-#elif ICBC_USE_SPMD == ICBC_NEON
+//ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d); // @@
+
+
+#elif ICBC_SIMD == ICBC_NEON
 
 #define VEC_SIZE 4
 
@@ -764,18 +855,12 @@ using VMask = uint32x4_t;
 ICBC_FORCEINLINE float & lane(VFloat & v, int i) {
 #if defined(__clang__)
     return v.e[i];
+#elif defined(_MSC_VER)
+    return v.n128_f32[i];
 #else
     return v.v[i];
 #endif
 }
-
-/*ICBC_FORCEINLINE float vextract(VFloat v, int i) {
-    return vgetq_lane_f32(v, i);      // @@ i must be constant
-}
-
-ICBC_FORCEINLINE VFloat vinsert(VFloat v, float x, int i) {
-    return vsetq_lane_f32(x, v, i);   // @@ i must be constant
-}*/
 
 ICBC_FORCEINLINE VFloat vzero() {
     return vdupq_n_f32(0.0f);
@@ -812,8 +897,17 @@ ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 }
 
 // a*b+c
-ICBC_FORCEINLINE VFloat vmad(VFloat a, VFloat b, VFloat c) {
+ICBC_FORCEINLINE VFloat vmadd(VFloat a, VFloat b, VFloat c) {
     return vmlaq_f32(c, a, b);
+}
+
+ICBC_FORCEINLINE VFloat vmsub(VFloat a, VFloat b, VFloat c) {
+    return a * b - c;
+}
+
+ICBC_FORCEINLINE VFloat vm2sub(VFloat a, VFloat b, VFloat c, VFloat d) {
+    // vmlsq_f32(a, b, c) == a - (b * c)
+    return vmlsq_f32(a * b, c, d);
 }
 
 ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
@@ -851,29 +945,35 @@ ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
 ICBC_FORCEINLINE bool all(VMask mask) {
     uint32x2_t m2 = vpmin_u32(vget_low_u32(mask), vget_high_u32(mask));
     uint32x2_t m1 = vpmin_u32(m2, m2);
+#if defined(_MSC_VER)
+    return m1.n64_u32[0] != 0;
+#else
     return m1[0] != 0;
+#endif
 }
 
 ICBC_FORCEINLINE bool any(VMask mask) {
     uint32x2_t m2 = vpmax_u32(vget_low_u32(mask), vget_high_u32(mask));
     uint32x2_t m1 = vpmax_u32(m2, m2);
+#if defined(_MSC_VER)
+    return m1.n64_u32[0] != 0;
+#else
     return m1[0] != 0;
+#endif
 }
 
-/*
-#define REDUCE_MIN_INDEX
 inline int reduce_min_index(VFloat v) {
-    float32x2_t minOfHalfs = vpmin_f32(vget_low_f32(v), vget_high_f32(v));
-    float32x2_t minOfMaxOfHalfs = vpmin_f32(minOfHalfs, minOfHalfs);
-    float minValue = vget_lane_f32(minOfMaxOfHalfs, 0);
+#if 0
+    float32x2_t m2 = vpmin_f32(vget_low_u32(V), vget_high_u32(v));
+    float32x2_t m1 = vpmin_f32(m2, m2);
+    float min_value = vget_lane_f32(m1, 0);
+    VFloat vmin = vbroadcast(min_value);
+
+    // (v <= vmin)
+    
     // @@ Find the lane that contains minValue?
-}
-*/
+#endif
 
-#endif // ICBC_NEON
-
-#ifndef REDUCE_MIN_INDEX
-inline int reduce_min_index(VFloat v) {
     // @@ Is there a better way to do this reduction?
     int min_idx = 0;
     float min_value = lane(v, 0);
@@ -888,8 +988,167 @@ inline int reduce_min_index(VFloat v) {
 
     return min_idx;
 }
-#endif
 
+// https://github.com/Maratyszcza/NNPACK/blob/master/src/neon/transpose.h
+ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d) {
+    // row0 = ( x00 x01 x02 x03 )
+    // row1 = ( x10 x11 x12 x13 )
+    // row2 = ( x20 x21 x22 x23 )
+    // row3 = ( x30 x31 x32 x33 )
+
+    // row01 = ( x00 x10 x02 x12 ), ( x01 x11 x03, x13 )
+    // row23 = ( x20 x30 x22 x32 ), ( x21 x31 x23, x33 )
+    float32x4x2_t row01 = vtrnq_f32(a, b);
+    float32x4x2_t row23 = vtrnq_f32(c, d);
+
+    // row0 = ( x00 x10 x20 x30 )
+    // row1 = ( x01 x11 x21 x31 )
+    // row2 = ( x02 x12 x22 x32 )
+    // row3 = ( x03 x13 x23 x33 )
+    a = vcombine_f32(vget_low_f32(row01.val[0]), vget_low_f32(row23.val[0]));
+    b = vcombine_f32(vget_low_f32(row01.val[1]), vget_low_f32(row23.val[1]));
+    c = vcombine_f32(vget_high_f32(row01.val[0]), vget_high_f32(row23.val[0]));
+    d = vcombine_f32(vget_high_f32(row01.val[1]), vget_high_f32(row23.val[1]));
+}
+
+#elif ICBC_SIMD == ICBC_VMX
+
+#define VEC_SIZE 4
+
+union VFloat {
+    vectro float v;
+    float e[4];
+    VFloat() {}
+    VFloat(vector float v) : v(v) {}
+    operator vector float & () { return v; }
+};
+struct VMask {
+    vector unsigned int v;
+    VMask() {}
+    VMask(vector unsigned int v) : v(v) {}
+    operator vector unsigned int & () { return v; }
+};
+
+ICBC_FORCEINLINE float & lane(VFloat & v, int i) {
+    return v.e[i];
+}
+
+ICBC_FORCEINLINE VFloat vzero() {
+    return vec_splats(0.0f);
+}
+
+ICBC_FORCEINLINE VFloat vbroadcast(float a) {
+    return vec_splats(a);
+}
+
+ICBC_FORCEINLINE VFloat vload(const float * ptr) {
+    return vec_ld(ptr)
+}
+
+ICBC_FORCEINLINE VFloat operator+(VFloat a, VFloat b) {
+    return vec_add(a, b);
+}
+
+ICBC_FORCEINLINE VFloat operator-(VFloat a, VFloat b) {
+    return vec_sub(a, b);
+}
+
+ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
+    return vec_madd(a, b, vec_splats(-0.0f));
+}
+
+ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
+#if ICBC_USE_RCP
+    // get the reciprocal estimate
+    vector float estimate = vec_re( v.vec );
+
+    // one round of Newton-Rhaphson refinement
+    vector float diff = vec_nmsub( estimate, v.vec, vec_splats( 1.0f ) );
+    returnvec_madd( diff, estimate, estimate );
+#else
+    return vec_div(vec_splats(1),a);
+#endif
+}
+
+// a*b+c
+ICBC_FORCEINLINE VFloat vmadd(VFloat a, VFloat b, VFloat c) {
+    return vec_madd(a, b, c);
+}
+
+ICBC_FORCEINLINE VFloat vmsub(VFloat a, VFloat b, VFloat c) {
+    return vec_msub(a, b, c); // @@ Is this right?
+}
+
+ICBC_FORCEINLINE VFloat vm2sub(VFloat a, VFloat b, VFloat c, VFloat d) {
+    return vmsub(a, b, c * d);
+}
+
+ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
+    return vec_min(vec_max(a, vzero()), vbroadcast(1));
+}
+
+ICBC_FORCEINLINE VFloat vround(VFloat a) {
+    // @@ Assumes a is positive and ~small
+    return vec_trunc(a + vbroadcast(0.5));
+}
+
+ICBC_FORCEINLINE VFloat lane_id() {
+    return (VFloat){ 0, 1, 2, 3 };
+}
+
+ICBC_FORCEINLINE VMask operator> (VFloat A, VFloat B) { return { vec_cmpgt(A, B) }; }
+ICBC_FORCEINLINE VMask operator>=(VFloat A, VFloat B) { return { vec_cmpge(A, B) }; }
+ICBC_FORCEINLINE VMask operator< (VFloat A, VFloat B) { return { vec_cmplt(A, B) }; }
+ICBC_FORCEINLINE VMask operator<=(VFloat A, VFloat B) { return { vec_cmple(A, B) }; }
+
+ICBC_FORCEINLINE VMask operator| (VMask A, VMask B) { return { vec_or(A, B) }; }
+ICBC_FORCEINLINE VMask operator& (VMask A, VMask B) { return { vec_and(A, B) }; }
+ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return { vec_xor(A, B) }; }
+
+// mask ? b : a
+ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
+    return vec_sel(a, b, mask);
+}
+
+ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
+
+    //VFloat vmin =  //@@ Horizontal min?
+    //return vec_cmpeq_idx(v, vmin);
+
+    // @@ Is there a better way to do this reduction?
+    int min_idx = 0;
+    float min_value = lane(v, 0);
+
+    for (int i = 1; i < VEC_SIZE; i++) {
+        float value = lane(v, i);
+        if (value < min_value) {
+            min_value = value;
+            min_idx = i;
+        }
+    }
+
+    return min_idx;
+}
+
+ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d) {
+    VFloat t1 = vec_mergeh(a, c);
+    VFloat t2 = vec_mergel(a, c);
+    VFloat t3 = vec_mergeh(b, d);
+    VFloat t4 = vec_mergel(b, d);
+    a = vec_mergeh(t1, t3);
+    b = vec_mergel(t1, t3);
+    c = vec_mergeh(t2, t4);
+    d = vec_mergel(t2, t4);
+}
+
+#endif // ICBC_SIMD == *
+
+#if ICBC_SIMD != ICBC_FLOAT
+ICBC_FORCEINLINE VFloat vmadd(VFloat a, float b, VFloat c) {
+    VFloat vb = vbroadcast(b);
+    return vmadd(a, vb, c);
+}
+#endif
 
 struct VVector3 {
     VFloat x;
@@ -914,13 +1173,54 @@ ICBC_FORCEINLINE VVector3 vbroadcast(float x, float y, float z) {
     return v8;
 }
 
+/*ICBC_FORCEINLINE VVector3 vload(const Vector3 * v) {
+    // @@
+}*/
+
+ICBC_FORCEINLINE VVector3 vload(const Vector4 * ptr) {
+#if ICBC_SIMD == ICBC_AVX512
+
+    // @@ We can probably do a lot better than this.
+    __m512i vindex = _mm512_set_epi32(4 * 15, 4 * 14, 4 * 13, 4 * 12, 4 * 11, 4 * 10, 4 * 9, 4 * 8, 4 * 7, 4 * 6, 4 * 5, 4 * 4, 4 * 3, 4 * 2, 4 * 1, 0);
+
+    VVector3 v;
+    v.x = _mm512_i32gather_ps(vindex, &ptr->x, 4);
+    v.y = _mm512_i32gather_ps(vindex, &ptr->y, 4);
+    v.z = _mm512_i32gather_ps(vindex, &ptr->z, 4);
+    return v;
+
+    // Transpose is faster than gathers.
+/*#elif ICBC_SIMD == ICBC_AVX2
+
+    __m256i vindex = _mm256_set_epi32(4 * 7, 4 * 6, 4 * 5, 4 * 4, 4 * 3, 4 * 2, 4 * 1, 0);
+
+    VVector3 v;
+    v.x = _mm256_i32gather_ps(&ptr->x, vindex, 4);
+    v.y = _mm256_i32gather_ps(&ptr->y, vindex, 4);
+    v.z = _mm256_i32gather_ps(&ptr->z, vindex, 4);
+    return v;
+*/
+#else
+
+    VVector3 v;
+    v.x = vload(&ptr->x + 0 * VEC_SIZE);
+    v.y = vload(&ptr->x + 1 * VEC_SIZE);
+    v.z = vload(&ptr->x + 2 * VEC_SIZE);
+    VFloat tmp = vload(&ptr->x + 3 * VEC_SIZE);
+
+    vtranspose4(v.x, v.y, v.z, tmp);
+
+    return v;
+#endif
+}
+
 
 ICBC_FORCEINLINE VVector3 operator+(VVector3 a, VVector3 b) {
-    VVector3 v8;
-    v8.x = (a.x + b.x);
-    v8.y = (a.y + b.y);
-    v8.z = (a.z + b.z);
-    return v8;
+    VVector3 v;
+    v.x = (a.x + b.x);
+    v.y = (a.y + b.y);
+    v.z = (a.z + b.z);
+    return v;
 }
 
 ICBC_FORCEINLINE VVector3 operator-(VVector3 a, VVector3 b) {
@@ -947,20 +1247,71 @@ ICBC_FORCEINLINE VVector3 operator*(VVector3 a, VFloat b) {
     return v8;
 }
 
-ICBC_FORCEINLINE VVector3 vmad(VVector3 a, VVector3 b, VVector3 c) {
+ICBC_FORCEINLINE VVector3 vmadd(VVector3 a, VVector3 b, VVector3 c) {
     VVector3 v8;
-    v8.x = vmad(a.x, b.x, c.x);
-    v8.y = vmad(a.y, b.y, c.y);
-    v8.z = vmad(a.z, b.z, c.z);
+    v8.x = vmadd(a.x, b.x, c.x);
+    v8.y = vmadd(a.y, b.y, c.y);
+    v8.z = vmadd(a.z, b.z, c.z);
     return v8;
 }
 
-ICBC_FORCEINLINE VVector3 vmad(VVector3 a, VFloat b, VVector3 c) {
+ICBC_FORCEINLINE VVector3 vmadd(VVector3 a, VFloat b, VVector3 c) {
     VVector3 v8;
-    v8.x = vmad(a.x, b, c.x);
-    v8.y = vmad(a.y, b, c.y);
-    v8.z = vmad(a.z, b, c.z);
+    v8.x = vmadd(a.x, b, c.x);
+    v8.y = vmadd(a.y, b, c.y);
+    v8.z = vmadd(a.z, b, c.z);
     return v8;
+}
+
+#if ICBC_SIMD != ICBC_FLOAT
+ICBC_FORCEINLINE VVector3 vmadd(VVector3 a, float b, VVector3 c) {
+    VVector3 v8;
+    VFloat vb = vbroadcast(b);
+    v8.x = vmadd(a.x, vb, c.x);
+    v8.y = vmadd(a.y, vb, c.y);
+    v8.z = vmadd(a.z, vb, c.z);
+    return v8;
+}
+#endif
+
+ICBC_FORCEINLINE VVector3 vmsub(VVector3 a, VFloat b, VFloat c) {
+    VVector3 v8;
+    v8.x = vmsub(a.x, b, c);
+    v8.y = vmsub(a.y, b, c);
+    v8.z = vmsub(a.z, b, c);
+    return v8;
+}
+
+ICBC_FORCEINLINE VVector3 vmsub(VVector3 a, VFloat b, VVector3 c) {
+    VVector3 v8;
+    v8.x = vmsub(a.x, b, c.x);
+    v8.y = vmsub(a.y, b, c.y);
+    v8.z = vmsub(a.z, b, c.z);
+    return v8;
+}
+
+ICBC_FORCEINLINE VVector3 vm2sub(VVector3 a, VFloat b, VVector3 c, VFloat d) {
+    VVector3 v;
+    v.x = vm2sub(a.x, b, c.x, d);
+    v.y = vm2sub(a.y, b, c.y, d);
+    v.z = vm2sub(a.z, b, c.z, d);
+    return v;
+}
+
+ICBC_FORCEINLINE VVector3 vm2sub(VVector3 a, VVector3 b, VVector3 c, VFloat d) {
+    VVector3 v;
+    v.x = vm2sub(a.x, b.x, c.x, d);
+    v.y = vm2sub(a.y, b.y, c.y, d);
+    v.z = vm2sub(a.z, b.z, c.z, d);
+    return v;
+}
+
+ICBC_FORCEINLINE VVector3 vm2sub(VVector3 a, VVector3 b, VVector3 c, VVector3 d) {
+    VVector3 v;
+    v.x = vm2sub(a.x, b.x, c.x, d.x);
+    v.y = vm2sub(a.y, b.y, c.y, d.y);
+    v.z = vm2sub(a.z, b.z, c.z, d.z);
+    return v;
 }
 
 ICBC_FORCEINLINE VVector3 vsaturate(VVector3 v) {
@@ -1015,6 +1366,12 @@ ICBC_FORCEINLINE VFloat vdot(VVector3 a, VVector3 b) {
     r = a.x * b.x + a.y * b.y + a.z * b.z;
     return r;
 }
+
+// Length squared.
+ICBC_FORCEINLINE VFloat vlen2(VVector3 v) {
+    return vdot(v, v);
+}
+
 
 // mask ? b : a
 ICBC_FORCEINLINE VVector3 vselect(VMask mask, VVector3 a, VVector3 b) {
@@ -1116,7 +1473,7 @@ inline bool is_black(Vector3 c) {
 }
 
 // Find similar colors and combine them together.
-static int reduce_colors(const Vector4 * input_colors, const float * input_weights, int count, Vector3 * colors, float * weights, bool * any_black)
+static int reduce_colors(const Vector4 * input_colors, const float * input_weights, int count, float threshold, Vector3 * colors, float * weights, bool * any_black)
 {
 #if 0
     for (int i = 0; i < 16; i++) {
@@ -1134,12 +1491,11 @@ static int reduce_colors(const Vector4 * input_colors, const float * input_weigh
         float wi = input_weights[i];
 
         if (wi > 0) {
-            const float threshold = 1.0f / 256;
-
             // Find matching color.
             int j;
             for (j = 0; j < n; j++) {
                 if (equal(colors[j], ci, threshold)) {
+                    colors[j] = (colors[j] * weights[j] + ci * wi) / (weights[j] + wi);
                     weights[j] += wi;
                     break;
                 }
@@ -1329,44 +1685,36 @@ int compute_sat(const Vector3 * colors, const float * weights, int count, Summed
         sat->w[i] = sat->w[i - 1] + w;
     }
 
+    // Try incremental decimation:
+    /*if (count > 4)
+    {
+        float threshold = 1.0f / 4;
+
+        for (uint i = 1; i < count; ++i)
+        {
+            if (sat->r[i] - sat->r[i - 1] < threshold &&
+                sat->g[i] - sat->g[i - 1] < threshold &&
+                sat->b[i] - sat->b[i - 1] < threshold)
+            {
+                for (int j = i+1; j < count; j++) {
+                    sat->r[j - 1] = sat->r[j];
+                    sat->g[j - 1] = sat->g[j];
+                    sat->b[j - 1] = sat->b[j];
+                    sat->w[j - 1] = sat->w[j];
+                }
+                count -= 1;
+                i -= 1;
+                if (count == 4) break;
+            }
+        }
+    }*/
+
     for (int i = count; i < 16; i++) {
         sat->r[i] = FLT_MAX;
         sat->g[i] = FLT_MAX;
         sat->b[i] = FLT_MAX;
         sat->w[i] = FLT_MAX;
     }
-
-    // Try incremental decimation:
-    // for each pair, compute distance and weighted half point. Determine error. If error under threshold, collapse and repeat.
-
-    /*if (m_count > 4)
-    {
-        float threshold = 1.0f / 128;
-
-        uint j = 0;
-        for (uint i = 0; i < m_count; ++i)
-        {
-            // @@ Compare 3D distance instead of projected distance?
-            //if (j > 0 && dps[i] - dps[j - 1] < threshold) {
-            if (j > 0 && lengthSquared(colors[order[i]] - colors[order[j - 1]]) < threshold*threshold) {
-                m_colors[j - 1] += m_colors[i];
-                m_weights[j - 1] += m_weights[i];
-            }
-            else {
-                m_colors[j] = m_colors[i];
-                m_weights[j] = m_weights[i];
-                j += 1;
-            }
-        }
-
-        m_count = j;
-
-        m_xsum = { 0.0f };
-        for (uint i = 0, j = 0; i < m_count; ++i)
-        {
-            m_xsum += m_colors[i];
-        }
-    }*/
 
     return count;
 }
@@ -1391,6 +1739,18 @@ static uint8 s_neon_vtl_index2_4[4 * 968];
 
 static uint8 s_neon_vtl_index0_3[4 * 152];
 static uint8 s_neon_vtl_index1_3[4 * 152];
+#endif
+
+#if ICBC_FAST_CLUSTER_FIT
+static ICBC_ALIGN_16 float s_c4_alpha2_sum[968 + 8];
+static ICBC_ALIGN_16 float s_c4_beta2_sum[968 + 8];
+static ICBC_ALIGN_16 float s_c4_alphabeta_sum[968 + 8];
+static ICBC_ALIGN_16 float s_c4_factor[968 + 8];
+
+//static ICBC_ALIGN_16 float s_c3_alpha2_sum[152 + 8];
+//static ICBC_ALIGN_16 float s_c3_beta2_sum[152 + 8];
+//static ICBC_ALIGN_16 float s_c3_alphabeta_sum[152 + 8];
+//static ICBC_ALIGN_16 float s_c3_factor[152 + 8];
 #endif
 
 
@@ -1501,6 +1861,48 @@ static void init_cluster_tables() {
     }
 #endif
 
+#if ICBC_FAST_CLUSTER_FIT
+
+    // Precompute least square factors for all possible 4-cluster configurations.
+    for (int i = 0; i < 968 + 8; i++) {
+        int c0 = s_fourCluster[i].c0;
+        int c1 = s_fourCluster[i].c1 - s_fourCluster[i].c0;
+        int c2 = s_fourCluster[i].c2 - s_fourCluster[i].c1;
+        int c3 = 16 - s_fourCluster[i].c2;
+
+        float alpha2_sum = c0 + c1 * (4.0f / 9.0f) + c2 * (1.0f / 9.0f);
+        float beta2_sum = c3 + c2 * (4.0f / 9.0f) + c1 * (1.0f / 9.0f);
+        float alphabeta_sum = (c1 + c2) * (2.0f / 9.0f);
+        float factor = float(1.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
+
+        s_c4_alpha2_sum[i] = alpha2_sum;
+        s_c4_beta2_sum[i] = beta2_sum;
+        s_c4_alphabeta_sum[i] = alphabeta_sum;
+        s_c4_factor[i] = factor;
+    }
+
+    // Precompute least square factors for all possible 3-cluster configurations.
+    /*for (int i = 0; i < 152 + 8; i++) {
+        int c0 = s_threeCluster[i].c0;
+        int c1 = s_threeCluster[i].c1 - s_threeCluster[i].c0;
+        int c2 = 16 - s_threeCluster[i].c1;
+
+        //int alpha2_sum = 4 * c0 + c1;
+        //int beta2_sum = 4 * c2 + c1;
+        //int alphabeta_sum = c1;
+        //float factor = float(4.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
+
+        float alpha2_sum = c0 + c1 * 0.25f;
+        float beta2_sum = c2 + c1 * 0.25f;
+        float alphabeta_sum = c1 * 0.25f;
+        float factor = float(1.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
+
+        s_c3_alpha2_sum[i] = (float)alpha2_sum;
+        s_c3_beta2_sum[i] = (float)beta2_sum;
+        s_c3_alphabeta_sum[i] = (float)alphabeta_sum;
+        s_c3_factor[i] = factor;
+    }*/
+#endif
 }
 
 
@@ -1842,13 +2244,13 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         VFloat alphabeta_sum = w1 * vbroadcast(0.25f);
         VFloat alpha2_sum = w0 + alphabeta_sum;
         VFloat beta2_sum = w2 + alphabeta_sum;
-        VFloat factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+        VFloat factor = vrcp(vm2sub(alpha2_sum, beta2_sum, alphabeta_sum, alphabeta_sum));
 
         VVector3 alphax_sum = x0 + x1 * vbroadcast(0.5f);
         VVector3 betax_sum = vbroadcast(r_sum, g_sum, b_sum) - alphax_sum;
 
-        VVector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
-        VVector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+        VVector3 a = vm2sub(alphax_sum, beta2_sum, betax_sum, alphabeta_sum) * factor;
+        VVector3 b = vm2sub(betax_sum, alpha2_sum, alphax_sum, alphabeta_sum) * factor;
 
         // clamp to the grid
         a = vsaturate(a);
@@ -1857,7 +2259,8 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         b = vround_ept(b);
 
         // compute the error
-        VVector3 e1 = vmad(a * a, alpha2_sum, vmad(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * vbroadcast(2.0f)));
+        VVector3 e2 = vm2sub(a, vmsub(b, alphabeta_sum, alphax_sum), b, betax_sum) * vbroadcast(2.0f);
+        VVector3 e1 = vmadd(a * a, alpha2_sum, vmadd(b * b, beta2_sum, e2));
 
         // apply the metric to the error term
         VFloat error = vdot(e1, vbroadcast(metric_sqr));
@@ -2360,17 +2763,17 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         w2 = w2 - w1;
         w1 = w1 - w0;
 
-        VFloat alpha2_sum = vmad(w2, vbroadcast(1.0f / 9.0f), vmad(w1, vbroadcast(4.0f / 9.0f), w0));
-        VFloat beta2_sum  = vmad(w1, vbroadcast(1.0f / 9.0f), vmad(w2, vbroadcast(4.0f / 9.0f), w3));
+        VFloat alpha2_sum = vmadd(w2, (1.0f / 9.0f), vmadd(w1, (4.0f / 9.0f), w0));
+        VFloat beta2_sum  = vmadd(w1, (1.0f / 9.0f), vmadd(w2, (4.0f / 9.0f), w3));
 
         VFloat alphabeta_sum = (w1 + w2) * vbroadcast(2.0f / 9.0f);
-        VFloat factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+        VFloat factor = vrcp(vm2sub(alpha2_sum, beta2_sum, alphabeta_sum, alphabeta_sum));
 
-        VVector3 alphax_sum = vmad(x2, vbroadcast(1.0f / 3.0f), vmad(x1, vbroadcast(2.0f / 3.0f), x0));
+        VVector3 alphax_sum = vmadd(x2, (1.0f / 3.0f), vmadd(x1, (2.0f / 3.0f), x0));
         VVector3 betax_sum = vbroadcast(r_sum, g_sum, b_sum) - alphax_sum;
 
-        VVector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
-        VVector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
+        VVector3 a = vm2sub(alphax_sum, beta2_sum, betax_sum, alphabeta_sum) * factor;
+        VVector3 b = vm2sub(betax_sum, alpha2_sum, alphax_sum, alphabeta_sum) * factor;
 
         // clamp to the grid
         a = vsaturate(a);
@@ -2379,7 +2782,8 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         b = vround_ept(b);
 
         // compute the error
-        VVector3 e1 = vmad(a * a, alpha2_sum, vmad(b * b, beta2_sum, (a * b * alphabeta_sum - a * alphax_sum - b * betax_sum) * vbroadcast(2.0f)));
+        VVector3 e2 = vm2sub(a, vmsub(b, alphabeta_sum, alphax_sum), b, betax_sum) * vbroadcast(2.0f);
+        VVector3 e1 = vmadd(a * a, alpha2_sum, vmadd(b * b, beta2_sum, e2));
 
         // apply the metric to the error term
         VFloat error = vdot(e1, vbroadcast(metric_sqr));
@@ -2412,76 +2816,141 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
 }
 
 
-#if 0 || ICBC_FAST_CLUSTER_FIT
+#if ICBC_FAST_CLUSTER_FIT
+static void fast_cluster_fit_four(const SummedAreaTable & sat, Vector3 metric_sqr, Vector3 * start, Vector3 * end)
+{
+    const float r_sum = sat.r[15];
+    const float g_sum = sat.g[15];
+    const float b_sum = sat.b[15];
 
-struct Precomp {
-    //uint8 c0, c1, c2, c3;
-    float alpha2_sum;
-    float beta2_sum;
-    float alphabeta_sum;
-    float factor;
-};
+    VFloat vbesterror = vbroadcast(FLT_MAX);
+    VVector3 vbeststart = { vzero(), vzero(), vzero() };
+    VVector3 vbestend = { vzero(), vzero(), vzero() };
 
-static ICBC_ALIGN_16 Precomp s_fourElement[969];
-static ICBC_ALIGN_16 Precomp s_threeElement[153];
+    // check all possible clusters for this total order
+    for (int i = 0; i < 968; i += VEC_SIZE)
+    {
+        VVector3 x0, x1, x2;
 
-static void init_lsqr_tables() {
+#if ICBC_USE_AVX512_PERMUTE
 
-    // Precompute least square factors for all possible 4-cluster configurations.
-    for (int c0 = 0, i = 0; c0 <= 16; c0++) {
-        for (int c1 = 0; c1 <= 16 - c0; c1++) {
-            for (int c2 = 0; c2 <= 16 - c0 - c1; c2++, i++) {
-                int c3 = 16 - c0 - c1 - c2;
+        // Load sat in one register:
+        VFloat vrsat = vload(sat.r);
+        VFloat vgsat = vload(sat.g);
+        VFloat vbsat = vload(sat.b);
 
-                //s_fourElement[i].c0 = c0;
-                //s_fourElement[i].c1 = c0 + c1;
-                //s_fourElement[i].c2 = c0 + c1 + c2;
-                //s_fourElement[i].c3 = 16;
+        // Load 4 uint8 per lane.
+        __m512i packedClusterIndex = _mm512_load_si512((__m512i *)&s_fourCluster[i]);
 
-                //int alpha2_sum = c0 * 9 + c1 * 4 + c2;
-                //int beta2_sum = c3 * 9 + c2 * 4 + c1;
-                //int alphabeta_sum = (c1 + c2) * 2;
-                //float factor = float(9.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
+        // Load index and decrement.
+        auto c0 = _mm512_and_epi32(packedClusterIndex, _mm512_set1_epi32(0xFF));
+        auto c0mask = _mm512_cmpgt_epi32_mask(c0, _mm512_setzero_si512());
+        c0 = _mm512_sub_epi32(c0, _mm512_set1_epi32(1));
 
-                float alpha2_sum = c0 + c1 * (4.0f / 9.0f) + c2 * (1.0f / 9.0f);
-                float beta2_sum = c3 + c2 * (4.0f / 9.0f) + c1 * (1.0f / 9.0f);
-                float alphabeta_sum = (c1 + c2) * (2.0f / 9.0f);
-                float factor = float(1.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
+        // if upper bit set, zero, otherwise load sat entry.
+        x0.x = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vrsat));
+        x0.y = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vgsat));
+        x0.z = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vbsat));
 
-                s_fourElement[i].alpha2_sum = (float)alpha2_sum;
-                s_fourElement[i].beta2_sum = (float)beta2_sum;
-                s_fourElement[i].alphabeta_sum = (float)alphabeta_sum;
-                s_fourElement[i].factor = factor;
+        auto c1 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 8), _mm512_set1_epi32(0xFF));
+        auto c1mask = _mm512_cmpgt_epi32_mask(c1, _mm512_setzero_si512());
+        c1 = _mm512_sub_epi32(c1, _mm512_set1_epi32(1));
+
+        x1.x = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vrsat));
+        x1.y = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vgsat));
+        x1.z = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vbsat));
+
+        auto c2 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 16), _mm512_set1_epi32(0xFF));
+        auto c2mask = _mm512_cmpgt_epi32_mask(c2, _mm512_setzero_si512());
+        c2 = _mm512_sub_epi32(c2, _mm512_set1_epi32(1));
+
+        x2.x = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vrsat));
+        x2.y = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vgsat));
+        x2.z = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vbsat));
+#else
+        // Scalar path
+        x0.x = vzero(); x0.y = vzero(); x0.z = vzero();
+        x1.x = vzero(); x1.y = vzero(); x1.z = vzero();
+        x2.x = vzero(); x2.y = vzero(); x2.z = vzero();
+
+        for (int l = 0; l < VEC_SIZE; l++) {
+            uint c0 = s_fourCluster[i + l].c0;
+            if (c0) {
+                c0 -= 1;
+                lane(x0.x, l) = sat.r[c0];
+                lane(x0.y, l) = sat.g[c0];
+                lane(x0.z, l) = sat.b[c0];
+            }
+
+            uint c1 = s_fourCluster[i + l].c1;
+            if (c1) {
+                c1 -= 1;
+                lane(x1.x, l) = sat.r[c1];
+                lane(x1.y, l) = sat.g[c1];
+                lane(x1.z, l) = sat.b[c1];
+            }
+
+            uint c2 = s_fourCluster[i + l].c2;
+            if (c2) {
+                c2 -= 1;
+                lane(x2.x, l) = sat.r[c2];
+                lane(x2.y, l) = sat.g[c2];
+                lane(x2.z, l) = sat.b[c2];
             }
         }
+#endif
+
+        VFloat alpha2_sum = vload(s_c4_alpha2_sum + i);
+        VFloat beta2_sum = vload(s_c4_beta2_sum + i);
+        VFloat alphabeta_sum = vload(s_c4_alphabeta_sum + i);
+        VFloat factor = vload(s_c4_factor + i);
+
+        //VFloat alpha2_sum = vmadd(w2, (1.0f / 9.0f), vmadd(w1, (4.0f / 9.0f), w0));
+        //VFloat beta2_sum = vmadd(w1, (1.0f / 9.0f), vmadd(w2, (4.0f / 9.0f), w3));
+        //VFloat alphabeta_sum = (w1 + w2) * vbroadcast(2.0f / 9.0f);
+        //VFloat factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
+
+        VVector3 alphax_sum = vmadd(x2, (1.0f / 3.0f), vmadd(x1, (2.0f / 3.0f), x0));
+        VVector3 betax_sum = vbroadcast(r_sum, g_sum, b_sum) - alphax_sum;
+
+        VVector3 a = vm2sub(alphax_sum, beta2_sum, betax_sum, alphabeta_sum) * factor;
+        VVector3 b = vm2sub(betax_sum, alpha2_sum, alphax_sum, alphabeta_sum) * factor;
+
+        // clamp to the grid
+        a = vsaturate(a);
+        b = vsaturate(b);
+        a = vround_ept(a);
+        b = vround_ept(b);
+
+        // compute the error
+        VVector3 e2 = vm2sub(a, vmsub(b, alphabeta_sum, alphax_sum), b, betax_sum) * vbroadcast(2.0f);
+        VVector3 e1 = vmadd(a * a, alpha2_sum, vmadd(b * b, beta2_sum, e2));
+
+        // apply the metric to the error term
+        VFloat error = vdot(e1, vbroadcast(metric_sqr));
+
+        // keep the solution if it wins
+        auto mask = (error < vbesterror);
+        vbesterror = vselect(mask, vbesterror, error);
+        vbeststart = vselect(mask, vbeststart, a);
+        vbestend = vselect(mask, vbestend, b);
     }
 
-    // Precompute least square factors for all possible 3-cluster configurations.
-    for (int c0 = 0, i = 0; c0 <= 16; c0++) {
-        for (int c1 = 0; c1 <= 16 - c0; c1++, i++) {
-            int c2 = 16 - c1 - c0;
+    int bestindex = reduce_min_index(vbesterror);
 
-            //s_threeElement[i].c0 = c0;
-            //s_threeElement[i].c1 = c1;
-            //s_threeElement[i].c2 = c2;
+    start->x = lane(vbeststart.x, bestindex);
+    start->y = lane(vbeststart.y, bestindex);
+    start->z = lane(vbeststart.z, bestindex);
 
-            //int alpha2_sum = 4 * c0 + c1;
-            //int beta2_sum = 4 * c2 + c1;
-            //int alphabeta_sum = c1;
-            //float factor = float(4.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
-
-            float alpha2_sum = c0 + c1 * 0.25f;
-            float beta2_sum = c2 + c1 * 0.25f;
-            float alphabeta_sum = c1 * 0.25f;
-            float factor = float(1.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
-
-            s_threeElement[i].alpha2_sum = (float)alpha2_sum;
-            s_threeElement[i].beta2_sum = (float)beta2_sum;
-            s_threeElement[i].alphabeta_sum = (float)alphabeta_sum;
-            s_threeElement[i].factor = factor;
-        }
-    }
+    end->x = lane(vbestend.x, bestindex);
+    end->y = lane(vbestend.y, bestindex);
+    end->z = lane(vbestend.z, bestindex);
 }
+#endif
+
+
+
+#if 0 && ICBC_FAST_CLUSTER_FIT
 
 // This is the ideal way to round, but it's too expensive to do this in the inner loop.
 inline Vector3 round565(const Vector3 & v) {
@@ -2891,7 +3360,7 @@ static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
     }
 }
 
-void decode_dxt1(const BlockDXT1 * block, unsigned char rgba_block[16 * 4], Decoder decoder)
+static void decode_dxt1(const BlockDXT1 * block, unsigned char rgba_block[16 * 4], Decoder decoder)
 {
     Color32 palette[4];
     if (decoder == Decoder_NVIDIA) {
@@ -3029,64 +3498,57 @@ float evaluate_dxt1_error(const uint8 rgba_block[16*4], const BlockDXT1 * block,
 
 static uint compute_indices4(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
 
-    uint indices = 0;
-    for (int i = 0; i < 16; i++) {
-        float d0 = evaluate_mse(palette[0], input_colors[i].xyz, color_weights);
-        float d1 = evaluate_mse(palette[1], input_colors[i].xyz, color_weights);
-        float d2 = evaluate_mse(palette[2], input_colors[i].xyz, color_weights);
-        float d3 = evaluate_mse(palette[3], input_colors[i].xyz, color_weights);
+    uint indices0 = 0;
+    uint indices1 = 0;
 
-        uint b0 = d0 > d3;
-        uint b1 = d1 > d2;
-        uint b2 = d0 > d2;
-        uint b3 = d1 > d3;
-        uint b4 = d2 > d3;
+    VVector3 vw = vbroadcast(color_weights);
+    VVector3 vp0 = vbroadcast(palette[0]) * vw;
+    VVector3 vp1 = vbroadcast(palette[1]) * vw;
+    VVector3 vp2 = vbroadcast(palette[2]) * vw;
+    VVector3 vp3 = vbroadcast(palette[3]) * vw;
 
-        uint x0 = b1 & b2;
-        uint x1 = b0 & b3;
-        uint x2 = b0 & b4;
+    for (int i = 0; i < 16; i += VEC_SIZE) {
+        VVector3 vc = vload(&input_colors[i]) * vw;
 
-        indices |= (x2 | ((x0 | x1) << 1)) << (2 * i);
+        VFloat d0 = vlen2(vc - vp0);
+        VFloat d1 = vlen2(vc - vp1);
+        VFloat d2 = vlen2(vc - vp2);
+        VFloat d3 = vlen2(vc - vp3);
+
+        VMask b1 = d1 > d2;
+        VMask b2 = d0 > d2;
+        VMask x0 = b1 & b2;
+
+        VMask b0 = d0 > d3;
+        VMask b3 = d1 > d3;
+        x0 = x0 | (b0 & b3);
+
+        VMask b4 = d2 > d3;
+        VMask x1 = b0 & b4;
+
+        indices0 |= mask(x0) << i;
+        indices1 |= mask(x1) << i;
     }
 
+    // Interleave the bits. https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/
+    uint indices = _pdep_u32(indices1, 0x55555555) | _pdep_u32(indices0, 0xaaaaaaaa);
     return indices;
 }
 
-
-static uint compute_indices4(const Vector3 input_colors[16], const Vector3 palette[4]) {
-
-    uint indices = 0;
-    for (int i = 0; i < 16; i++) {
-        float d0 = evaluate_mse(palette[0], input_colors[i], {1,1,1});
-        float d1 = evaluate_mse(palette[1], input_colors[i], {1,1,1});
-        float d2 = evaluate_mse(palette[2], input_colors[i], {1,1,1});
-        float d3 = evaluate_mse(palette[3], input_colors[i], {1,1,1});
-
-        uint b0 = d0 > d3;
-        uint b1 = d1 > d2;
-        uint b2 = d0 > d2;
-        uint b3 = d1 > d3;
-        uint b4 = d2 > d3;
-
-        uint x0 = b1 & b2;
-        uint x1 = b0 & b3;
-        uint x2 = b0 & b4;
-
-        indices |= (x2 | ((x0 | x1) << 1)) << (2 * i);
-    }
-
-    return indices;
-}
-
-
-static uint compute_indices(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
+static uint compute_indices3(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
+#if 0
+    Vector3 p0 = palette[0] * color_weights;
+    Vector3 p1 = palette[1] * color_weights;
+    Vector3 p2 = palette[2] * color_weights;
+    Vector3 p3 = palette[3] * color_weights;
 
     uint indices = 0;
     for (int i = 0; i < 16; i++) {
-        float d0 = evaluate_mse(palette[0], input_colors[i].xyz, color_weights);
-        float d1 = evaluate_mse(palette[1], input_colors[i].xyz, color_weights);
-        float d2 = evaluate_mse(palette[2], input_colors[i].xyz, color_weights);
-        float d3 = evaluate_mse(palette[3], input_colors[i].xyz, color_weights);
+        Vector3 ci = input_colors[i].xyz * color_weights;
+        float d0 = lengthSquared(p0 - ci);
+        float d1 = lengthSquared(p1 - ci);
+        float d2 = lengthSquared(p2 - ci);
+        float d3 = lengthSquared(p3 - ci);
 
         uint index;
         if (d0 < d1 && d0 < d2 && d0 < d3) index = 0;
@@ -3094,10 +3556,166 @@ static uint compute_indices(const Vector4 input_colors[16], const Vector3 & colo
         else if (d2 < d3) index = 2;
         else index = 3;
 
-		indices |= index << (2 * i);
-	}
+        indices |= index << (2 * i);
+    }
 
-	return indices;
+    return indices;
+#else
+    uint indices0 = 0;
+    uint indices1 = 0;
+
+    VVector3 vw = vbroadcast(color_weights);
+    VVector3 vp0 = vbroadcast(palette[0]) * vw;
+    VVector3 vp1 = vbroadcast(palette[1]) * vw;
+    VVector3 vp2 = vbroadcast(palette[2]) * vw;
+
+    for (int i = 0; i < 16; i += VEC_SIZE) {
+        VVector3 vc = vload(&input_colors[i]) * vw;
+
+        VFloat d0 = vlen2(vc - vp0);
+        VFloat d1 = vlen2(vc - vp1);
+        VFloat d2 = vlen2(vc - vp2);
+        VFloat d3 = vdot(vc, vc);
+
+        // @@ simplify i1 & i2
+        //VMask i0 = (d0 < d1) & (d0 < d2) & (d0 < d3); // 0
+        VMask i1 = (d1 <= d0) & (d1 < d2) & (d1 < d3); // 1
+        VMask i2 = (d2 <= d0) & (d2 <= d1) & (d2 < d3); // 2
+        VMask i3 = (d3 <= d0) & (d3 <= d1) & (d3 <= d2); // 3
+        //VFloat vindex = vselect(i0, vselect(i1, vselect(i2, vbroadcast(3), vbroadcast(2)), vbroadcast(1)), vbroadcast(0));
+
+        indices0 |= mask(i2 | i3) << i;
+        indices1 |= mask(i1 | i3) << i;
+    }
+
+    // Interleave the bits. https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/
+    uint indices = _pdep_u32(indices1, 0x55555555) | _pdep_u32(indices0, 0xaaaaaaaa);
+    return indices;
+#endif
+}
+
+
+
+static uint compute_indices4(const Vector3 input_colors[16], const Vector3 palette[4]) {
+#if 0
+    uint indices0 = 0;
+    uint indices1 = 0;
+
+    VVector3 vp0 = vbroadcast(palette[0]);
+    VVector3 vp1 = vbroadcast(palette[1]);
+    VVector3 vp2 = vbroadcast(palette[2]);
+    VVector3 vp3 = vbroadcast(palette[3]);
+
+    for (int i = 0; i < 16; i += VEC_SIZE) {
+        VVector3 vc = vload(&input_colors[i]);
+
+        VFloat d0 = vlen2(vc - vp0);
+        VFloat d1 = vlen2(vc - vp1);
+        VFloat d2 = vlen2(vc - vp2);
+        VFloat d3 = vlen2(vc - vp3);
+
+        VMask b1 = d1 > d2;
+        VMask b2 = d0 > d2;
+        VMask x0 = b1 & b2;
+
+        VMask b0 = d0 > d3;
+        VMask b3 = d1 > d3;
+        x0 = x0 | (b0 & b3);
+
+        VMask b4 = d2 > d3;
+        VMask x1 = b0 & b4;
+
+        indices0 |= mask(x0) << i;
+        indices1 |= mask(x1) << i;
+    }
+
+    // Interleave the bits. https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/
+    uint indices = _pdep_u32(indices1, 0x55555555) | _pdep_u32(indices0, 0xaaaaaaaa);
+    return indices;
+#else
+    uint indices = 0;
+    for (int i = 0; i < 16; i++) {
+        Vector3 ci = input_colors[i];
+        float d0 = lengthSquared(palette[0] - ci);
+        float d1 = lengthSquared(palette[1] - ci);
+        float d2 = lengthSquared(palette[2] - ci);
+        float d3 = lengthSquared(palette[3] - ci);
+
+        uint b0 = d0 > d3;
+        uint b1 = d1 > d2;
+        uint b2 = d0 > d2;
+        uint b3 = d1 > d3;
+        uint b4 = d2 > d3;
+
+        uint x0 = b1 & b2;
+        uint x1 = b0 & b3;
+        uint x2 = b0 & b4;
+
+        indices |= (x2 | ((x0 | x1) << 1)) << (2 * i);
+    }
+
+    return indices;
+#endif
+}
+
+
+static uint compute_indices(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
+#if 0
+    Vector3 p0 = palette[0] * color_weights;
+    Vector3 p1 = palette[1] * color_weights;
+    Vector3 p2 = palette[2] * color_weights;
+    Vector3 p3 = palette[3] * color_weights;
+
+    uint indices = 0;
+    for (int i = 0; i < 16; i++) {
+        Vector3 ci = input_colors[i].xyz * color_weights;
+        float d0 = lengthSquared(p0 - ci);
+        float d1 = lengthSquared(p1 - ci);
+        float d2 = lengthSquared(p2 - ci);
+        float d3 = lengthSquared(p3 - ci);
+
+        uint index;
+        if (d0 < d1 && d0 < d2 && d0 < d3) index = 0;
+        else if (d1 < d2 && d1 < d3) index = 1;
+        else if (d2 < d3) index = 2;
+        else index = 3;
+
+        indices |= index << (2 * i);
+    }
+
+    return indices;
+#else
+    uint indices0 = 0;
+    uint indices1 = 0;
+
+    VVector3 vw = vbroadcast(color_weights);
+    VVector3 vp0 = vbroadcast(palette[0]) * vw;
+    VVector3 vp1 = vbroadcast(palette[1]) * vw;
+    VVector3 vp2 = vbroadcast(palette[2]) * vw;
+    VVector3 vp3 = vbroadcast(palette[3]) * vw;
+
+    for (int i = 0; i < 16; i += VEC_SIZE) {
+        VVector3 vc = vload(&input_colors[i]) * vw;
+
+        VFloat d0 = vlen2(vc - vp0);
+        VFloat d1 = vlen2(vc - vp1);
+        VFloat d2 = vlen2(vc - vp2);
+        VFloat d3 = vlen2(vc - vp3);
+
+        //VMask i0 = (d0 < d1) & (d0 < d2) & (d0 < d3);
+        VMask i1 = (d1 <= d0) & (d1 < d2) & (d1 < d3);
+        VMask i2 = (d2 <= d0) & (d2 <= d1) & (d2 < d3);
+        VMask i3 = (d3 <= d0) & (d3 <= d1) & (d3 <= d2);
+        //VFloat vindex = vselect(i0, vselect(i1, vselect(i2, vbroadcast(3), vbroadcast(2)), vbroadcast(1)), vbroadcast(0));
+
+        indices0 |= mask(i2 | i3) << i;
+        indices1 |= mask(i1 | i3) << i;
+    }
+
+    // Interleave the bits. https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/
+    uint indices = _pdep_u32(indices1, 0x55555555) | _pdep_u32(indices0, 0xaaaaaaaa);
+    return indices;
+#endif
 }
 
 
@@ -3364,7 +3982,7 @@ static void PrepareOptTable(uint8 * table, const uint8 * expand, int size)
     }
 }
 
-static void init_dxt1_tables()
+static void init_single_color_tables()
 {
     // Prepare single color lookup tables.
     uint8 expand5[32];
@@ -3433,7 +4051,12 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
     int sat_count = compute_sat(colors, weights, count, &sat);
 
     Vector3 start, end;
+#if ICBC_FAST_CLUSTER_FIT
+    if (sat_count == 16) fast_cluster_fit_four(sat, metric_sqr, &start, &end);
+    else cluster_fit_four(sat, sat_count, metric_sqr, &start, &end);
+#else
     cluster_fit_four(sat, sat_count, metric_sqr, &start, &end);
+#endif
 
     output_block4(input_colors, color_weights, start, end, output);
 
@@ -3545,13 +4168,100 @@ static float refine_endpoints(const Vector4 input_colors[16], const float input_
     return best_error;
 }
 
+struct Options {
+    float threshold = 0.0f;
+    bool box_fit = false;
+    bool least_squares_fit = false;
+    bool cluster_fit = false;
+    bool cluster_fit_3 = false;
+    bool cluster_fit_3_black_only = false;
+    bool endpoint_refinement = false;
+};
 
-static float compress_dxt1(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, bool hq, BlockDXT1 * output)
+static Options setup_options(Quality level, bool enable_three_color_mode, bool enable_transparent_black) {
+    Options opt;
+
+    switch (level) {
+        case Quality_Level1:            // Box fit + least squares fit.
+            opt.box_fit = true;
+            opt.least_squares_fit = true;
+            opt.threshold = 1.0f / 128;
+            break;
+
+        case Quality_Level2:            // Cluster fit 4, threshold = 24.
+            opt.box_fit = false;
+            opt.cluster_fit = true;
+            opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
+            opt.threshold = 1.0f / 24;
+            break;
+
+        case Quality_Level3:            // Cluster fit 4, threshold = 32.
+            opt.box_fit = false;
+            opt.cluster_fit = true;
+            opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
+            opt.threshold = 1.0f / 32;
+            break;
+
+        case Quality_Level4:            // Cluster fit 3+4, threshold = 48.
+            opt.box_fit = true;
+            opt.cluster_fit = true;
+            opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
+            opt.threshold = 1.0f / 48;
+            break;
+
+        case Quality_Level5:            // Cluster fit 3+4, threshold = 64.
+            opt.box_fit = true;
+            opt.cluster_fit = true;
+            opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
+            opt.threshold = 1.0f / 64;
+            break;
+
+        case Quality_Level6:            // Cluster fit 3+4, threshold = 96.
+            opt.box_fit = true;
+            opt.least_squares_fit = true;
+            opt.cluster_fit = true;
+            opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
+            opt.threshold = 1.0f / 96;
+            break;
+
+        case Quality_Level7:            // Cluster fit 3+4, threshold = 128.
+            opt.box_fit = true;
+            opt.least_squares_fit = true;
+            opt.cluster_fit = true;
+            opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
+            opt.threshold = 1.0f / 128;
+            break;
+
+        case Quality_Level8:            // Cluster fit 3+4, threshold = 256.
+            opt.box_fit = true;
+            opt.least_squares_fit = true;
+            opt.cluster_fit = true;
+            opt.cluster_fit_3 = enable_three_color_mode;
+            opt.threshold = 1.0f / 256;
+            break;
+
+        case Quality_Level9:           // Cluster fit 3+4, threshold = 256 + Refinement.
+            opt.box_fit = true;
+            opt.least_squares_fit = true;
+            opt.cluster_fit = true;
+            opt.cluster_fit_3 = enable_three_color_mode;
+            opt.threshold = 1.0f / 256;
+            opt.endpoint_refinement = true;
+            break;
+    }
+
+    return opt;
+}
+
+
+static float compress_dxt1(Quality level, const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, bool three_color_black, BlockDXT1 * output)
 {
+    Options opt = setup_options(level, three_color_mode, three_color_black);
+
     Vector3 colors[16];
     float weights[16];
-    bool use_transparent_black = false;
-    int count = reduce_colors(input_colors, input_weights, 16, colors, weights, &use_transparent_black);
+    bool any_black = false;
+    int count = reduce_colors(input_colors, input_weights, 16, opt.threshold, colors, weights, &any_black);
 
     if (count == 0) {
         // Output trivial block.
@@ -3567,203 +4277,52 @@ static float compress_dxt1(const Vector4 input_colors[16], const float input_wei
         return evaluate_mse(input_colors, input_weights, color_weights, output);
     }
 
+    float error = FLT_MAX;
+
     // Quick end point selection.
-    Vector3 c0, c1;
-    fit_colors_bbox(colors, count, &c0, &c1);
-    inset_bbox(&c0, &c1);
-    select_diagonal(colors, count, &c0, &c1);
-    output_block4(input_colors, color_weights, c0, c1, output);
+    if (opt.box_fit) {
+        Vector3 c0, c1;
+        fit_colors_bbox(colors, count, &c0, &c1);
+        inset_bbox(&c0, &c1);
+        select_diagonal(colors, count, &c0, &c1);
+        output_block4(input_colors, color_weights, c0, c1, output);
 
-    float error = evaluate_mse(input_colors, input_weights, color_weights, output);
+        error = evaluate_mse(input_colors, input_weights, color_weights, output);
 
-    // Refine color for the selected indices.
-    if (optimize_end_points4(output->indices, input_colors, 16, &c0, &c1)) {
-        BlockDXT1 optimized_block;
-        output_block4(input_colors, color_weights, c0, c1, &optimized_block);
+        // Refine color for the selected indices.
+        if (opt.least_squares_fit && optimize_end_points4(output->indices, input_colors, 16, &c0, &c1)) {
+            BlockDXT1 optimized_block;
+            output_block4(input_colors, color_weights, c0, c1, &optimized_block);
 
-        float optimized_error = evaluate_mse(input_colors, input_weights, color_weights, &optimized_block);
-        if (optimized_error < error) {
-            error = optimized_error;
-            *output = optimized_block;
+            float optimized_error = evaluate_mse(input_colors, input_weights, color_weights, &optimized_block);
+            if (optimized_error < error) {
+                error = optimized_error;
+                *output = optimized_block;
+            }
         }
     }
-    //float error = FLT_MAX;
 
-    // @@ Use current endpoints as input for initial PCA approximation?
+    if (opt.cluster_fit) {
+        // @@ Use current endpoints as input for initial PCA approximation?
 
-    // Try cluster fit.
-    BlockDXT1 cluster_fit_output;
-    float cluster_fit_error = compress_dxt1_cluster_fit(input_colors, input_weights, colors, weights, count, color_weights, three_color_mode, use_transparent_black, &cluster_fit_output);
-    if (cluster_fit_error < error) {
-        *output = cluster_fit_output;
-        error = cluster_fit_error;
+        bool use_three_color_black = any_black && three_color_black;
+        bool use_three_color_mode = opt.cluster_fit_3 || (use_three_color_black && opt.cluster_fit_3_black_only);
+
+        // Try cluster fit.
+        BlockDXT1 cluster_fit_output;
+        float cluster_fit_error = compress_dxt1_cluster_fit(input_colors, input_weights, colors, weights, count, color_weights, use_three_color_mode, use_three_color_black, &cluster_fit_output);
+        if (cluster_fit_error < error) {
+            *output = cluster_fit_output;
+            error = cluster_fit_error;
+        }
     }
 
-    if (hq) {
+    if (opt.endpoint_refinement) {
         error = refine_endpoints(input_colors, input_weights, color_weights, three_color_mode, error, output);
     }
 
     return error;
 }
-
-
-//
-static bool centroid_end_points(uint indices, const Vector3 * colors, /*const float * weights,*/ float factor[4], Vector3 * c0, Vector3 * c1) {
-
-    *c0 = { 0,0,0 };
-    *c1 = { 0,0,0 };
-    float w0_sum = 0;
-    float w1_sum = 0;
-
-    for (int i = 0; i < 16; i++) {
-        int idx = (indices >> (2 * i)) & 3;
-        float w0 = factor[idx];// * weights[i];
-        float w1 = (1 - factor[idx]);// * weights[i];
-
-        *c0 += colors[i] * w0;   w0_sum += w0;
-        *c1 += colors[i] * w1;   w1_sum += w1;
-    }
-
-    *c0 *= (1.0f / w0_sum);
-    *c1 *= (1.0f / w1_sum);
-
-    return true;
-}
-
-
-
-static float compress_dxt1_test(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, BlockDXT1 * output)
-{
-    Vector3 colors[16];
-    for (int i = 0; i < 16; i++) {
-        colors[i] = input_colors[i].xyz;
-    }
-    int count = 16;
-
-    // Quick end point selection.
-    Vector3 c0, c1;
-    fit_colors_bbox(colors, count, &c0, &c1);
-    if (c0 == c1) {
-        compress_dxt1_single_color_optimal(vector3_to_color32(c0), output);
-        return evaluate_mse(input_colors, input_weights, color_weights, output);
-    }
-    inset_bbox(&c0, &c1);
-    select_diagonal(colors, count, &c0, &c1);
-
-    output_block4(colors, c0, c1, output);
-    float best_error = evaluate_mse(input_colors, input_weights, color_weights, output);
-
-
-    // Given an index assignment, we can compute end points in two different ways:
-    // - least squares optimization.
-    // - centroid.
-    // Are these different? The first finds the end points that minimize the least squares error.
-    // The second averages the input colors
-
-    while (true) {
-        float last_error = best_error;
-        uint last_indices = output->indices;
-
-        int cluster_counts[4] = { 0, 0, 0, 0 };
-        for (int i = 0; i < 16; i++) {
-            int idx = (output->indices >> (2 * i)) & 3;
-            cluster_counts[idx] += 1;
-        }
-        int n = 0;
-        for (int i = 0; i < 4; i++) n += int(cluster_counts[i] != 0);
-
-        if (n == 4) {
-            float factors[4] = { 1.0f, 0.0f, 2.0f / 3, 1.0f / 3 };
-            if (optimize_end_points4(last_indices, colors, 16, factors, &c0, &c1)) {
-                BlockDXT1 refined_block;
-                output_block4(colors, c0, c1, &refined_block);
-                float new_error = evaluate_mse(input_colors, input_weights, color_weights, &refined_block);
-                if (new_error < best_error) {
-                    best_error = new_error;
-                    *output = refined_block;
-                }
-            }
-        }
-        else if (n == 3) {
-            // 4 options:
-            static const float tables[4][3] = {
-                { 0, 2.f/3, 1.f/3 },    // 0, 1/3, 2/3
-                { 1, 0,     1.f/3 },    // 0, 1/3, 1
-                { 1, 0,     2.f/3 },    // 0, 2/3, 1
-                { 1, 2.f/3, 1.f/3 },    // 1/2, 2/3, 1
-            };
-
-            for (int k = 0; k < 4; k++) {
-                // Remap tables:
-                float factors[4];
-                for (int i = 0, j = 0; i < 4; i++) {
-                    factors[i] = tables[k][j];
-                    if (cluster_counts[i] != 0) j += 1;
-                }
-                if (optimize_end_points4(last_indices, colors, 16, factors, &c0, &c1)) {
-                    BlockDXT1 refined_block;
-                    output_block4(colors, c0, c1, &refined_block);
-                    float new_error = evaluate_mse(input_colors, input_weights, color_weights, &refined_block);
-                    if (new_error < best_error) {
-                        best_error = new_error;
-                        *output = refined_block;
-                    }
-                }
-            }
-
-            // @@ And 1 3-color block:
-            // 0, 1/2, 1
-        }
-        else if (n == 2) {
-
-            // 6 options:
-            static const float tables[6][2] = {
-                { 0, 1.f/3 },       // 0, 1/3
-                { 0, 2.f/3 },       // 0, 2/3
-                { 1, 0 },           // 0, 1
-                { 2.f/3, 1.f/3 },   // 1/3, 2/3
-                { 1, 1.f/3 },       // 1/3, 1
-                { 1, 2.f/3 },       // 2/3, 1
-            };
-
-            for (int k = 0; k < 6; k++) {
-                // Remap tables:
-                float factors[4];
-                for (int i = 0, j = 0; i < 4; i++) {
-                    factors[i] = tables[k][j];
-                    if (cluster_counts[i] != 0) j += 1;
-                }
-                if (optimize_end_points4(last_indices, colors, 16, factors, &c0, &c1)) {
-                    BlockDXT1 refined_block;
-                    output_block4(colors, c0, c1, &refined_block);
-                    float new_error = evaluate_mse(input_colors, input_weights, color_weights, &refined_block);
-                    if (new_error < best_error) {
-                        best_error = new_error;
-                        *output = refined_block;
-                    }
-                }
-            }
-
-            // @@ And 2 3-color blocks:
-            // 0, 0.5
-            // 0.5, 1
-            // 0, 1     // This is equivalent to the 4 color mode.
-        }
-
-        // If error has not improved, stop.
-        //if (best_error == last_error) break;
-
-        // If error has not improved or indices haven't changed, stop.
-        if (output->indices == last_indices || best_error < last_error) break;
-    }
-
-    if (false) {
-        best_error = refine_endpoints(input_colors, input_weights, color_weights, false, best_error, output);
-    }
-
-    return best_error;
-}
-
 
 
 static float compress_dxt1_fast(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, BlockDXT1 * output)
@@ -3831,15 +4390,12 @@ static void compress_dxt1_fast(const uint8 input_colors[16*4], BlockDXT1 * outpu
 // Public API
 
 void init_dxt1() {
-    init_dxt1_tables();
+    init_single_color_tables();
     init_cluster_tables();
-#if ICBC_FAST_CLUSTER_FIT
-    init_lsqr_tables();
-#endif
 }
 
-float compress_dxt1(const float input_colors[16 * 4], const float input_weights[16], const float rgb[3], bool three_color_mode, bool hq, void * output) {
-    return compress_dxt1((Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, three_color_mode, hq, (BlockDXT1*)output);
+float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool three_color_mode, bool three_color_black, void * output) {
+    return compress_dxt1(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, three_color_mode, three_color_black, (BlockDXT1*)output);
 }
 
 float compress_dxt1_fast(const float input_colors[16 * 4], const float input_weights[16], const float rgb[3], void * output) {
@@ -3850,20 +4406,40 @@ void compress_dxt1_fast(const unsigned char input_colors[16 * 4], void * output)
     compress_dxt1_fast(input_colors, (BlockDXT1*)output);
 }
 
-void compress_dxt1_test(const float input_colors[16 * 4], const float input_weights[16], const float rgb[3], void * output) {
-    compress_dxt1_test((Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, (BlockDXT1*)output);
+void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
+    decode_dxt1((const BlockDXT1 *)block, rgba_block, decoder);
 }
 
 float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * dxt_block, Decoder decoder/*=Decoder_D3D10*/) {
-    return evaluate_dxt1_error(rgba_block, (BlockDXT1 *)dxt_block, decoder);
+    return evaluate_dxt1_error(rgba_block, (const BlockDXT1 *)dxt_block, decoder);
 }
 
 } // icbc
 
-// Do not polute preprocessor definitions.
-#undef ICBC_DECODER
-#undef ICBC_USE_SPMD
-#undef ICBC_ASSERT
+// // Do not polute preprocessor definitions.
+// #undef ICBC_DECODER
+// #undef ICBC_SIMD
+// #undef ICBC_ASSERT
+
+// #undef ICBC_FLOAT
+// #undef ICBC_SSE2
+// #undef ICBC_SSE41
+// #undef ICBC_AVX1
+// #undef ICBC_AVX2
+// #undef ICBC_AVX512
+// #undef ICBC_NEON
+// #undef ICBC_VMX
+
+// #undef ICBC_USE_FMA
+// #undef ICBC_USE_AVX2_PERMUTE2
+// #undef ICBC_USE_AVX2_PERMUTE
+// #undef ICBC_USE_AVX2_GATHER
+// #undef ICBC_USE_AVX512_PERMUTE
+// #undef ICBC_USE_NEON_VTL
+
+// #undef ICBC_FAST_CLUSTER_FIT
+// #undef ICBC_PERFECT_ROUND
+// #undef ICBC_USE_SAT
 
 #endif // ICBC_IMPLEMENTATION
 
@@ -3871,6 +4447,7 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 // v1.00 - Initial release.
 // v1.01 - Added SPMD code path with AVX support.
 // v1.02 - Removed SIMD code path.
+// v1.03 - Adaptive quality modes. AVX512, Neon, Altive, vectorized reduction and index selection.
 
 // Copyright (c) 2020 Ignacio Castano <castano@gmail.com>
 //
