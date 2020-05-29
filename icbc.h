@@ -62,7 +62,7 @@ namespace icbc {
 // SIMD version. (FLOAT=0, SSE2=1, SSE41=2, AVX1=3, AVX2=4, AVX512=5, NEON=-1, VMX=-2)
 #ifndef ICBC_SIMD
 #if _M_ARM
-#define ICBC_SIMD -1          
+#define ICBC_SIMD -1
 #else
 #define ICBC_SIMD 5
 #endif
@@ -75,12 +75,11 @@ namespace icbc {
 #endif
 
 // Apparently rcp is not deterministic (different precision on Intel and AMD), enable if you don't care about that for a small performance boost.
-#define ICBC_USE_RCP 1
+//#define ICBC_USE_RCP 1
 
 #if ICBC_SIMD == ICBC_AVX2
 #define ICBC_USE_AVX2_PERMUTE2 1    // Using permutevar8x32 and bitops.
 #define ICBC_USE_AVX2_PERMUTE 0     // Using blendv and permutevar8x32.
-#define ICBC_USE_AVX2_GATHER 0      // Using gathers for SAT lookup.
 #endif
 
 #if ICBC_SIMD == ICBC_AVX512
@@ -88,7 +87,7 @@ namespace icbc {
 #endif
 
 #if ICBC_SIMD == ICBC_NEON
-#define ICBC_USE_NEON_VTL 0
+#define ICBC_USE_NEON_VTL 0         // Not tested.
 #endif
 
 
@@ -97,8 +96,7 @@ namespace icbc {
 #endif
 
 // Some experimental knobs:
-#define ICBC_FAST_CLUSTER_FIT 0     // This ignores input weights for a moderate speedup.
-#define ICBC_PERFECT_ROUND 0        // Enable perfect rounding in scalar code path only.
+#define ICBC_PERFECT_ROUND 0        // Enable perfect rounding to compute cluster fit residual.
 
 
 #if ICBC_SIMD >= ICBC_SSE2
@@ -403,6 +401,14 @@ ICBC_FORCEINLINE VFloat vload(const float * ptr) {
     return _mm_load_ps(ptr);
 }
 
+ICBC_FORCEINLINE VFloat vgather(const float * base, VFloat index) {
+    VFloat v;
+    for (int i = 0; i < VEC_SIZE; i++) {
+        lane(v, i) = base[int(lane(index, i))];
+    }
+    return v;
+}
+
 ICBC_FORCEINLINE VFloat operator+(VFloat a, VFloat b) {
     return _mm_add_ps(a, b);
 }
@@ -564,6 +570,18 @@ ICBC_FORCEINLINE VFloat vload(const float * ptr) {
     return _mm256_load_ps(ptr);
 }
 
+ICBC_FORCEINLINE VFloat vgather(const float * base, VFloat index) {
+#if ICBC_SIMD == ICBC_AVX2
+    return _mm256_i32gather_ps(base, _mm256_cvtps_epi32(index), 4);
+#else
+    VFloat v;
+    for (int i = 0; i < VEC_SIZE; i++) {
+        lane(v, i) = base[int(lane(index, i))];
+    }
+    return v;
+#endif
+}
+
 ICBC_FORCEINLINE VFloat operator+(VFloat a, VFloat b) {
     return _mm256_add_ps(a, b);
 }
@@ -628,6 +646,10 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
 
 ICBC_FORCEINLINE VFloat vround(VFloat a) {
     return _mm256_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+}
+
+ICBC_FORCEINLINE VFloat vtruncate(VFloat a) {
+    return _mm256_round_ps(a, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC);
 }
 
 ICBC_FORCEINLINE VFloat lane_id() {
@@ -739,6 +761,10 @@ ICBC_FORCEINLINE VFloat vload(VMask mask, const float * ptr, float fallback) {
     return _mm512_mask_load_ps(_mm512_set1_ps(fallback), mask.m, ptr);
 }
 
+ICBC_FORCEINLINE VFloat vgather(const float * base, VFloat index) {
+    return _mm512_i32gather_ps(_mm512_cvtps_epi32(index), base, 4);
+}
+
 ICBC_FORCEINLINE VFloat operator+(VFloat a, VFloat b) {
     return _mm512_add_ps(a, b);
 }
@@ -783,6 +809,10 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
 
 ICBC_FORCEINLINE VFloat vround(VFloat a) {
     return _mm512_roundscale_ps(a, _MM_FROUND_TO_NEAREST_INT);
+}
+
+ICBC_FORCEINLINE VFloat vtruncate(VFloat a) {
+    return _mm512_roundscale_ps(a, _MM_FROUND_TO_ZERO);
 }
 
 ICBC_FORCEINLINE VFloat lane_id() {
@@ -916,10 +946,18 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
 
 ICBC_FORCEINLINE VFloat vround(VFloat a) {
 #if __ARM_RACH >= 8
-    return vrndq_f32(a);
+    return vrndqn_f32(a);   // Round to integral (to nearest, ties to even)
 #else
     // @@ Assumes a is positive and ~small
     return vcvtq_f32_s32(vcvtq_s32_f32(a + vbroadcast(0.5)));
+#endif
+}
+
+ICBC_FORCEINLINE VFloat vround(VFloat a) {
+#if __ARM_RACH >= 8
+    return vrndq_f32(a);
+#else
+    return vcvtq_f32_s32(vcvtq_s32_f32(a));
 #endif
 }
 
@@ -1064,7 +1102,7 @@ ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 
     // one round of Newton-Rhaphson refinement
     vector float diff = vec_nmsub( estimate, v.vec, vec_splats( 1.0f ) );
-    returnvec_madd( diff, estimate, estimate );
+    return vec_madd(diff, estimate, estimate );
 #else
     return vec_div(vec_splats(1),a);
 #endif
@@ -1090,6 +1128,10 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
 ICBC_FORCEINLINE VFloat vround(VFloat a) {
     // @@ Assumes a is positive and ~small
     return vec_trunc(a + vbroadcast(0.5));
+}
+
+ICBC_FORCEINLINE VFloat vtruncate(VFloat a) {
+    return vec_trunc(a);
 }
 
 ICBC_FORCEINLINE VFloat lane_id() {
@@ -1174,13 +1216,13 @@ ICBC_FORCEINLINE VVector3 vbroadcast(float x, float y, float z) {
 }
 
 /*ICBC_FORCEINLINE VVector3 vload(const Vector3 * v) {
-    // @@
+    // @@ See this for a 8x3 transpose: https://software.intel.com/content/www/us/en/develop/articles/3d-vector-normalization-using-256-bit-intel-advanced-vector-extensions-intel-avx.html
 }*/
 
 ICBC_FORCEINLINE VVector3 vload(const Vector4 * ptr) {
 #if ICBC_SIMD == ICBC_AVX512
 
-    // @@ We can probably do a lot better than this.
+    // @@ AVX512 transpose not implemented.
     __m512i vindex = _mm512_set_epi32(4 * 15, 4 * 14, 4 * 13, 4 * 12, 4 * 11, 4 * 10, 4 * 9, 4 * 8, 4 * 7, 4 * 6, 4 * 5, 4 * 4, 4 * 3, 4 * 2, 4 * 1, 0);
 
     VVector3 v;
@@ -1189,17 +1231,6 @@ ICBC_FORCEINLINE VVector3 vload(const Vector4 * ptr) {
     v.z = _mm512_i32gather_ps(vindex, &ptr->z, 4);
     return v;
 
-    // Transpose is faster than gathers.
-/*#elif ICBC_SIMD == ICBC_AVX2
-
-    __m256i vindex = _mm256_set_epi32(4 * 7, 4 * 6, 4 * 5, 4 * 4, 4 * 3, 4 * 2, 4 * 1, 0);
-
-    VVector3 v;
-    v.x = _mm256_i32gather_ps(&ptr->x, vindex, 4);
-    v.y = _mm256_i32gather_ps(&ptr->y, vindex, 4);
-    v.z = _mm256_i32gather_ps(&ptr->z, vindex, 4);
-    return v;
-*/
 #else
 
     VVector3 v;
@@ -1314,50 +1345,42 @@ ICBC_FORCEINLINE VVector3 vm2sub(VVector3 a, VVector3 b, VVector3 c, VVector3 d)
     return v;
 }
 
-ICBC_FORCEINLINE VVector3 vsaturate(VVector3 v) {
-    VVector3 r;
-    r.x = vsaturate(v.x);
-    r.y = vsaturate(v.y);
-    r.z = vsaturate(v.z);
-    return r;
-}
+extern const float midpoints5[32];
+extern const float midpoints6[64];
 
-/*static const float midpoints5[32];
-static const float midpoints6[64];
+ICBC_FORCEINLINE VFloat vround5(VFloat x) {
+    const VFloat rb_scale = vbroadcast(31.0f);
+    const VFloat rb_inv_scale = vbroadcast(1.0f / 31.0f);
 
-// @@ How can we vectorize this? It requires a 32 or 64 table lookup.
-/*ICBC_FORCEINLINE VFloat vround5(VFloat x) {
-    VFloat q = vfloor(x);
-    for (int i = 0; i < VEC_SIZE; i++) {
-        lane(q, i) += (lane(x, i) > midpoints5[int(lane(q, i))]);
-    }
-    return q;
+#if ICBC_PERFECT_ROUND
+    VFloat q = vtruncate(x * rb_scale);
+    VFloat mp = vgather(midpoints5, q);
+    //return (q + (vbroadcast(1.0f) & (x > mp))) * rb_inv_scale;
+    return (q + vselect(x > mp, vzero(), vbroadcast(1))) * rb_inv_scale;
+#else
+    return vround(x * rb_scale) * rb_inv_scale;
+#endif
 }
 
 ICBC_FORCEINLINE VFloat vround6(VFloat x) {
-    VFloat q = vfloor(x);
-    for (int i = 0; i < VEC_SIZE; i++) {
-        q[i] += (x[i] > midpoints6[int(q[i])]);
-    }
-    return q;
-}*/
-
-ICBC_FORCEINLINE VVector3 vround_ept(VVector3 v) {
-    const VFloat rb_scale = vbroadcast(31.0f);
-    const VFloat rb_inv_scale = vbroadcast(1.0f / 31.0f);
     const VFloat g_scale = vbroadcast(63.0f);
     const VFloat g_inv_scale = vbroadcast(1.0f / 63.0f);
 
-    VVector3 r;
 #if ICBC_PERFECT_ROUND
-    r.x = vround5(v.x * rb_scale) * rb_inv_scale;
-    r.y = vround6(v.y * g_scale) * g_inv_scale;
-    r.z = vround5(v.z * rb_scale) * rb_inv_scale;
+    VFloat q = vtruncate(x * g_scale);
+    VFloat mp = vgather(midpoints6, q);
+    //return (q + (vbroadcast(1) & (x > mp))) * g_inv_scale;
+    return (q + vselect(x > mp, vzero(), vbroadcast(1))) * g_inv_scale;
 #else
-    r.x = vround(v.x * rb_scale) * rb_inv_scale;
-    r.y = vround(v.y * g_scale) * g_inv_scale;
-    r.z = vround(v.z * rb_scale) * rb_inv_scale;
+    return vround(x * g_scale) * g_inv_scale;
 #endif
+}
+
+ICBC_FORCEINLINE VVector3 vround_ept(VVector3 v) {
+    VVector3 r;
+    r.x = vround5(vsaturate(v.x));
+    r.y = vround6(vsaturate(v.y));
+    r.z = vround5(vsaturate(v.z));
     return r;
 }
 
@@ -1390,14 +1413,14 @@ ICBC_FORCEINLINE VVector3 vselect(VMask mask, VVector3 a, VVector3 b) {
 
 static const float midpoints5[32] = {
     0.015686f, 0.047059f, 0.078431f, 0.111765f, 0.145098f, 0.176471f, 0.207843f, 0.241176f, 0.274510f, 0.305882f, 0.337255f, 0.370588f, 0.403922f, 0.435294f, 0.466667f, 0.5f,
-    0.533333f, 0.564706f, 0.596078f, 0.629412f, 0.662745f, 0.694118f, 0.725490f, 0.758824f, 0.792157f, 0.823529f, 0.854902f, 0.888235f, 0.921569f, 0.952941f, 0.984314f, 1.0f
+    0.533333f, 0.564706f, 0.596078f, 0.629412f, 0.662745f, 0.694118f, 0.725490f, 0.758824f, 0.792157f, 0.823529f, 0.854902f, 0.888235f, 0.921569f, 0.952941f, 0.984314f, FLT_MAX
 };
 
 static const float midpoints6[64] = {
     0.007843f, 0.023529f, 0.039216f, 0.054902f, 0.070588f, 0.086275f, 0.101961f, 0.117647f, 0.133333f, 0.149020f, 0.164706f, 0.180392f, 0.196078f, 0.211765f, 0.227451f, 0.245098f,
     0.262745f, 0.278431f, 0.294118f, 0.309804f, 0.325490f, 0.341176f, 0.356863f, 0.372549f, 0.388235f, 0.403922f, 0.419608f, 0.435294f, 0.450980f, 0.466667f, 0.482353f, 0.500000f,
     0.517647f, 0.533333f, 0.549020f, 0.564706f, 0.580392f, 0.596078f, 0.611765f, 0.627451f, 0.643137f, 0.658824f, 0.674510f, 0.690196f, 0.705882f, 0.721569f, 0.737255f, 0.754902f,
-    0.772549f, 0.788235f, 0.803922f, 0.819608f, 0.835294f, 0.850980f, 0.866667f, 0.882353f, 0.898039f, 0.913725f, 0.929412f, 0.945098f, 0.960784f, 0.976471f, 0.992157f, 1.0f
+    0.772549f, 0.788235f, 0.803922f, 0.819608f, 0.835294f, 0.850980f, 0.866667f, 0.882353f, 0.898039f, 0.913725f, 0.929412f, 0.945098f, 0.960784f, 0.976471f, 0.992157f, FLT_MAX
 };
 
 /*void init_tables() {
@@ -1406,14 +1429,14 @@ static const float midpoints6[64] = {
         float f1 = float(((i+1) << 3) | ((i+1) >> 2)) / 255.0f;
         midpoints5[i] = (f0 + f1) * 0.5;
     }
-    midpoints5[31] = 1.0f;
+    midpoints5[31] = FLT_MAX;
 
     for (int i = 0; i < 63; i++) {
         float f0 = float(((i+0) << 2) | ((i+0) >> 4)) / 255.0f;
         float f1 = float(((i+1) << 2) | ((i+1) >> 4)) / 255.0f;
         midpoints6[i] = (f0 + f1) * 0.5;
     }
-    midpoints6[63] = 1.0f;
+    midpoints6[63] = FLT_MAX;
 }*/
 
 static Color16 vector3_to_color16(const Vector3 & v) {
@@ -1467,6 +1490,7 @@ inline Color32 vector3_to_color32(Vector3 v) {
 inline bool is_black(Vector3 c) {
     // This large threshold seems to improve compression. This is not forcing these texels to be black, just
     // causes them to be ignored during PCA.
+    // @@ We may want to adjust this based on the quality level, since this increases the number of blocks that try cluster-3 fitting.
     //return c.x < midpoints5[0] && c.y < midpoints6[0] && c.z < midpoints5[0];
     //return c.x < 1.0f / 32 && c.y < 1.0f / 32 && c.z < 1.0f / 32;
     return c.x < 1.0f / 8 && c.y < 1.0f / 8 && c.z < 1.0f / 8;
@@ -1741,19 +1765,6 @@ static uint8 s_neon_vtl_index0_3[4 * 152];
 static uint8 s_neon_vtl_index1_3[4 * 152];
 #endif
 
-#if ICBC_FAST_CLUSTER_FIT
-static ICBC_ALIGN_16 float s_c4_alpha2_sum[968 + 8];
-static ICBC_ALIGN_16 float s_c4_beta2_sum[968 + 8];
-static ICBC_ALIGN_16 float s_c4_alphabeta_sum[968 + 8];
-static ICBC_ALIGN_16 float s_c4_factor[968 + 8];
-
-//static ICBC_ALIGN_16 float s_c3_alpha2_sum[152 + 8];
-//static ICBC_ALIGN_16 float s_c3_beta2_sum[152 + 8];
-//static ICBC_ALIGN_16 float s_c3_alphabeta_sum[152 + 8];
-//static ICBC_ALIGN_16 float s_c3_factor[152 + 8];
-#endif
-
-
 static void init_cluster_tables() {
 
     for (int t = 1, i = 0; t <= 16; t++) {
@@ -1860,49 +1871,6 @@ static void init_cluster_tables() {
         s_neon_vtl_index1_3[4 * i + 3] = uint8(c1 * 4 + 3);
     }
 #endif
-
-#if ICBC_FAST_CLUSTER_FIT
-
-    // Precompute least square factors for all possible 4-cluster configurations.
-    for (int i = 0; i < 968 + 8; i++) {
-        int c0 = s_fourCluster[i].c0;
-        int c1 = s_fourCluster[i].c1 - s_fourCluster[i].c0;
-        int c2 = s_fourCluster[i].c2 - s_fourCluster[i].c1;
-        int c3 = 16 - s_fourCluster[i].c2;
-
-        float alpha2_sum = c0 + c1 * (4.0f / 9.0f) + c2 * (1.0f / 9.0f);
-        float beta2_sum = c3 + c2 * (4.0f / 9.0f) + c1 * (1.0f / 9.0f);
-        float alphabeta_sum = (c1 + c2) * (2.0f / 9.0f);
-        float factor = float(1.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
-
-        s_c4_alpha2_sum[i] = alpha2_sum;
-        s_c4_beta2_sum[i] = beta2_sum;
-        s_c4_alphabeta_sum[i] = alphabeta_sum;
-        s_c4_factor[i] = factor;
-    }
-
-    // Precompute least square factors for all possible 3-cluster configurations.
-    /*for (int i = 0; i < 152 + 8; i++) {
-        int c0 = s_threeCluster[i].c0;
-        int c1 = s_threeCluster[i].c1 - s_threeCluster[i].c0;
-        int c2 = 16 - s_threeCluster[i].c1;
-
-        //int alpha2_sum = 4 * c0 + c1;
-        //int beta2_sum = 4 * c2 + c1;
-        //int alphabeta_sum = c1;
-        //float factor = float(4.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
-
-        float alpha2_sum = c0 + c1 * 0.25f;
-        float beta2_sum = c2 + c1 * 0.25f;
-        float alphabeta_sum = c1 * 0.25f;
-        float factor = float(1.0 / (alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum));
-
-        s_c3_alpha2_sum[i] = (float)alpha2_sum;
-        s_c3_beta2_sum[i] = (float)beta2_sum;
-        s_c3_alphabeta_sum[i] = (float)alphabeta_sum;
-        s_c3_factor[i] = factor;
-    }*/
-#endif
 }
 
 
@@ -1961,7 +1929,7 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         w1 = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vwsat));
 
 #elif ICBC_USE_AVX2_PERMUTE2
-        // Fabian Giesen says not to mix _mm256_blendv_ps and _mm256_permutevar8x32_ps since they contend for the same resources and instead emulate blendv using bit ops.
+        // Fabian Giesen says not to mix _mm256_blendv_ps and _mm256_permutevar8x32_ps since they contend for the same gate and instead emulate blendv using bit ops.
         // On my machine (Intel Skylake) I'm not seeing any performance difference, but this may still be valuable for older CPUs.
 
         // Load 4 uint8 per lane.
@@ -2118,28 +2086,6 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
         }
 
-#elif ICBC_USE_AVX2_GATHER // @@ Make this work with the 16-element SAT
-
-        // Load 4 uint8 per lane.
-        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_threeCluster[i]);
-
-        // Load SAT elements.
-        float * base = (float *)sat.x;
-
-        __m256i c0 = _mm256_slli_epi32(packedClusterIndex, 2);
-        c0 = _mm256_and_si256(c0, _mm256_set1_epi32(0x3FC));
-
-        x0.x = _mm256_i32gather_ps(base + 0, c0, 4);
-        x0.y = _mm256_i32gather_ps(base + 1, c0, 4);
-        x0.z = _mm256_i32gather_ps(base + 2, c0, 4);
-        w0 = _mm256_i32gather_ps(base + 3, c0, 4);
-
-        __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 6), _mm256_set1_epi32(0x3FC));
-        x1.x = _mm256_i32gather_ps(base + 0, c1, 4);
-        x1.y = _mm256_i32gather_ps(base + 1, c1, 4);
-        x1.z = _mm256_i32gather_ps(base + 2, c1, 4);
-        w1 = _mm256_i32gather_ps(base + 3, c1, 4);
-
 #elif ICBC_USE_NEON_VTL
 
         uint8x16_t idx0 = (uint8x16_t &)s_neon_vtl_index0_3[4*i];
@@ -2252,9 +2198,7 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         VVector3 a = vm2sub(alphax_sum, beta2_sum, betax_sum, alphabeta_sum) * factor;
         VVector3 b = vm2sub(betax_sum, alpha2_sum, alphax_sum, alphabeta_sum) * factor;
 
-        // clamp to the grid
-        a = vsaturate(a);
-        b = vsaturate(b);
+        // snap to the grid
         a = vround_ept(a);
         b = vround_ept(b);
 
@@ -2573,63 +2517,6 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c2Hi), w2, _mm256_castsi256_ps(c2Hi));
         }
 
-#elif ICBC_USE_AVX2_GATHER
-
-        // Load 4 uint8 per lane.
-        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_fourCluster[i]);
-
-#if 0 // Masked gathers.
-        auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
-        auto c0mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
-        c0 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
-
-        x0.x = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.r, c0, c0mask, 4);
-        x0.y = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.g, c0, c0mask, 4);
-        x0.z = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.b, c0, c0mask, 4);
-        w0 = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.w, c0, c0mask, 4);
-
-        auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
-        auto c1mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
-        c1 = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
-
-        x1.x = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.r, c1, c1mask, 4);
-        x1.y = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.g, c1, c1mask, 4);
-        x1.z = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.b, c1, c1mask, 4);
-        w1 = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.w, c1, c1mask, 4);
-
-        auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
-        auto c2mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
-        c2 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
-
-        x2.x = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.r, c2, c2mask, 4);
-        x2.y = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.g, c2, c2mask, 4);
-        x2.z = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.b, c2, c2mask, 4);
-        w2 = _mm256_mask_i32gather_ps(_mm256_setzero_ps(), sat.w, c2, c2mask, 4);
-#else
-        // Load SAT elements.
-        float * base = (float *)sat.x;
-
-        __m256i c0 = _mm256_slli_epi32(packedClusterIndex, 2);
-        c0 = _mm256_and_si256(c0, _mm256_set1_epi32(0x3FC));
-
-        x0.x = _mm256_i32gather_ps(base + 0, c0, 4);
-        x0.y = _mm256_i32gather_ps(base + 1, c0, 4);
-        x0.z = _mm256_i32gather_ps(base + 2, c0, 4);
-        w0 = _mm256_i32gather_ps(base + 3, c0, 4);
-
-        __m256i c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 6), _mm256_set1_epi32(0x3FC));
-        x1.x = _mm256_i32gather_ps(base + 0, c1, 4);
-        x1.y = _mm256_i32gather_ps(base + 1, c1, 4);
-        x1.z = _mm256_i32gather_ps(base + 2, c1, 4);
-        w1 = _mm256_i32gather_ps(base + 3, c1, 4);
-
-        __m256i c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 14), _mm256_set1_epi32(0x3FC));
-        x2.x = _mm256_i32gather_ps(base + 0, c2, 4);
-        x2.y = _mm256_i32gather_ps(base + 1, c2, 4);
-        x2.z = _mm256_i32gather_ps(base + 2, c2, 4);
-        w2 = _mm256_i32gather_ps(base + 3, c2, 4);
-#endif
-
 #elif ICBC_USE_NEON_VTL
 
         uint8x16_t idx0 = (uint8x16_t &)s_neon_vtl_index0_4[4*i];
@@ -2775,9 +2662,7 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         VVector3 a = vm2sub(alphax_sum, beta2_sum, betax_sum, alphabeta_sum) * factor;
         VVector3 b = vm2sub(betax_sum, alpha2_sum, alphax_sum, alphabeta_sum) * factor;
 
-        // clamp to the grid
-        a = vsaturate(a);
-        b = vsaturate(b);
+        // snap to the grid
         a = vround_ept(a);
         b = vround_ept(b);
 
@@ -2814,415 +2699,6 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
     *start = beststart;
     *end = bestend;
 }
-
-
-#if ICBC_FAST_CLUSTER_FIT
-static void fast_cluster_fit_four(const SummedAreaTable & sat, Vector3 metric_sqr, Vector3 * start, Vector3 * end)
-{
-    const float r_sum = sat.r[15];
-    const float g_sum = sat.g[15];
-    const float b_sum = sat.b[15];
-
-    VFloat vbesterror = vbroadcast(FLT_MAX);
-    VVector3 vbeststart = { vzero(), vzero(), vzero() };
-    VVector3 vbestend = { vzero(), vzero(), vzero() };
-
-    // check all possible clusters for this total order
-    for (int i = 0; i < 968; i += VEC_SIZE)
-    {
-        VVector3 x0, x1, x2;
-
-#if ICBC_USE_AVX512_PERMUTE
-
-        // Load sat in one register:
-        VFloat vrsat = vload(sat.r);
-        VFloat vgsat = vload(sat.g);
-        VFloat vbsat = vload(sat.b);
-
-        // Load 4 uint8 per lane.
-        __m512i packedClusterIndex = _mm512_load_si512((__m512i *)&s_fourCluster[i]);
-
-        // Load index and decrement.
-        auto c0 = _mm512_and_epi32(packedClusterIndex, _mm512_set1_epi32(0xFF));
-        auto c0mask = _mm512_cmpgt_epi32_mask(c0, _mm512_setzero_si512());
-        c0 = _mm512_sub_epi32(c0, _mm512_set1_epi32(1));
-
-        // if upper bit set, zero, otherwise load sat entry.
-        x0.x = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vrsat));
-        x0.y = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vgsat));
-        x0.z = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vbsat));
-
-        auto c1 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 8), _mm512_set1_epi32(0xFF));
-        auto c1mask = _mm512_cmpgt_epi32_mask(c1, _mm512_setzero_si512());
-        c1 = _mm512_sub_epi32(c1, _mm512_set1_epi32(1));
-
-        x1.x = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vrsat));
-        x1.y = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vgsat));
-        x1.z = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vbsat));
-
-        auto c2 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 16), _mm512_set1_epi32(0xFF));
-        auto c2mask = _mm512_cmpgt_epi32_mask(c2, _mm512_setzero_si512());
-        c2 = _mm512_sub_epi32(c2, _mm512_set1_epi32(1));
-
-        x2.x = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vrsat));
-        x2.y = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vgsat));
-        x2.z = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vbsat));
-#else
-        // Scalar path
-        x0.x = vzero(); x0.y = vzero(); x0.z = vzero();
-        x1.x = vzero(); x1.y = vzero(); x1.z = vzero();
-        x2.x = vzero(); x2.y = vzero(); x2.z = vzero();
-
-        for (int l = 0; l < VEC_SIZE; l++) {
-            uint c0 = s_fourCluster[i + l].c0;
-            if (c0) {
-                c0 -= 1;
-                lane(x0.x, l) = sat.r[c0];
-                lane(x0.y, l) = sat.g[c0];
-                lane(x0.z, l) = sat.b[c0];
-            }
-
-            uint c1 = s_fourCluster[i + l].c1;
-            if (c1) {
-                c1 -= 1;
-                lane(x1.x, l) = sat.r[c1];
-                lane(x1.y, l) = sat.g[c1];
-                lane(x1.z, l) = sat.b[c1];
-            }
-
-            uint c2 = s_fourCluster[i + l].c2;
-            if (c2) {
-                c2 -= 1;
-                lane(x2.x, l) = sat.r[c2];
-                lane(x2.y, l) = sat.g[c2];
-                lane(x2.z, l) = sat.b[c2];
-            }
-        }
-#endif
-
-        VFloat alpha2_sum = vload(s_c4_alpha2_sum + i);
-        VFloat beta2_sum = vload(s_c4_beta2_sum + i);
-        VFloat alphabeta_sum = vload(s_c4_alphabeta_sum + i);
-        VFloat factor = vload(s_c4_factor + i);
-
-        //VFloat alpha2_sum = vmadd(w2, (1.0f / 9.0f), vmadd(w1, (4.0f / 9.0f), w0));
-        //VFloat beta2_sum = vmadd(w1, (1.0f / 9.0f), vmadd(w2, (4.0f / 9.0f), w3));
-        //VFloat alphabeta_sum = (w1 + w2) * vbroadcast(2.0f / 9.0f);
-        //VFloat factor = vrcp(alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum);
-
-        VVector3 alphax_sum = vmadd(x2, (1.0f / 3.0f), vmadd(x1, (2.0f / 3.0f), x0));
-        VVector3 betax_sum = vbroadcast(r_sum, g_sum, b_sum) - alphax_sum;
-
-        VVector3 a = vm2sub(alphax_sum, beta2_sum, betax_sum, alphabeta_sum) * factor;
-        VVector3 b = vm2sub(betax_sum, alpha2_sum, alphax_sum, alphabeta_sum) * factor;
-
-        // clamp to the grid
-        a = vsaturate(a);
-        b = vsaturate(b);
-        a = vround_ept(a);
-        b = vround_ept(b);
-
-        // compute the error
-        VVector3 e2 = vm2sub(a, vmsub(b, alphabeta_sum, alphax_sum), b, betax_sum) * vbroadcast(2.0f);
-        VVector3 e1 = vmadd(a * a, alpha2_sum, vmadd(b * b, beta2_sum, e2));
-
-        // apply the metric to the error term
-        VFloat error = vdot(e1, vbroadcast(metric_sqr));
-
-        // keep the solution if it wins
-        auto mask = (error < vbesterror);
-        vbesterror = vselect(mask, vbesterror, error);
-        vbeststart = vselect(mask, vbeststart, a);
-        vbestend = vselect(mask, vbestend, b);
-    }
-
-    int bestindex = reduce_min_index(vbesterror);
-
-    start->x = lane(vbeststart.x, bestindex);
-    start->y = lane(vbeststart.y, bestindex);
-    start->z = lane(vbeststart.z, bestindex);
-
-    end->x = lane(vbestend.x, bestindex);
-    end->y = lane(vbestend.y, bestindex);
-    end->z = lane(vbestend.z, bestindex);
-}
-#endif
-
-
-
-#if 0 && ICBC_FAST_CLUSTER_FIT
-
-// This is the ideal way to round, but it's too expensive to do this in the inner loop.
-inline Vector3 round565(const Vector3 & v) {
-    static const Vector3 grid = { 31.0f, 63.0f, 31.0f };
-    static const Vector3 gridrcp = { 1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f };
-
-    Vector3 q = floor(grid * v);
-    q.x += (v.x > midpoints5[int(q.x)]);
-    q.y += (v.y > midpoints6[int(q.y)]);
-    q.z += (v.z > midpoints5[int(q.z)]);
-    q *= gridrcp;
-    return q;
-}
-
-void ClusterFit::setColorSet(const Vector4 * colors, const Vector3 & metric)
-{
-    m_metricSqr = metric * metric;
-
-    m_count = 16;
-
-    static const float weights[16] = {1,1,1,1, 1,1,1,1, 1,1,1,1, 1,1,1,1};
-    Vector3 vc[16];
-    for (int i = 0; i < 16; i++) vc[i] = colors[i].xyz;
-
-    // I've tried using a lower quality approximation of the principal direction, but the best fit line seems to produce best results.
-    Vector3 principal = computePrincipalComponent_PowerMethod(16, vc, weights);
-
-    // build the list of values
-    int order[16];
-    float dps[16];
-    for (uint i = 0; i < 16; ++i)
-    {
-        order[i] = i;
-        dps[i] = dot(colors[i].xyz, principal);
-
-        if (colors[i].x < midpoints5[0] && colors[i].y < midpoints6[0] && colors[i].z < midpoints5[0]) anyBlack = true;
-    }
-
-    // stable sort
-    for (uint i = 0; i < 16; ++i)
-    {
-        for (uint j = i; j > 0 && dps[j] < dps[j - 1]; --j)
-        {
-            swap(dps[j], dps[j - 1]);
-            swap(order[j], order[j - 1]);
-        }
-    }
-
-    for (uint i = 0; i < 16; ++i)
-    {
-        int p = order[i];
-        m_colors[i] = colors[p].xyz;
-        m_weights[i] = 1.0f;
-    }
-}
-
-void ClusterFit::fastCompress3(Vector3 * start, Vector3 * end)
-{
-    ICBC_ASSERT(m_count == 16);
-    const Vector3 grid = { 31.0f, 63.0f, 31.0f };
-    const Vector3 gridrcp = { 1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f };
-
-    // declare variables
-    Vector3 beststart = { 0.0f };
-    Vector3 bestend = { 0.0f };
-    float besterror = FLT_MAX;
-
-    Vector3 x0 = { 0.0f };
-
-    // check all possible clusters for this total order
-    for (uint c0 = 0, i = 0; c0 <= 16; c0++)
-    {
-        Vector3 x1 = { 0.0f };
-
-        for (uint c1 = 0; c1 <= 16 - c0; c1++, i++)
-        {
-            float const alpha2_sum = s_threeElement[i].alpha2_sum;
-            float const beta2_sum = s_threeElement[i].beta2_sum;
-            float const alphabeta_sum = s_threeElement[i].alphabeta_sum;
-            float const factor = s_threeElement[i].factor;
-
-            Vector3 const alphax_sum = x0 + x1 * 0.5f;
-            Vector3 const betax_sum = Vector3(r_sum, g_sum, b_sum) - alphax_sum;
-
-            Vector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
-            Vector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
-
-            // clamp to the grid
-            a = saturate(a);
-            b = saturate(b);
-#if ICBC_PERFECT_ROUND
-            a = round565(a);
-            b = round565(b);
-#else
-            a = round(grid * a) * gridrcp;
-            b = round(grid * b) * gridrcp;
-#endif
-
-            // compute the error
-            Vector3 e1 = a * a*alpha2_sum + b * b*beta2_sum + 2.0f*(a*b*alphabeta_sum - a * alphax_sum - b * betax_sum);
-
-            // apply the metric to the error term
-            float error = dot(e1, m_metricSqr);
-
-            // keep the solution if it wins
-            if (error < besterror)
-            {
-                besterror = error;
-                beststart = a;
-                bestend = b;
-            }
-
-            x1 += m_colors[c0 + c1];
-        }
-
-        x0 += m_colors[c0];
-    }
-
-    *start = beststart;
-    *end = bestend;
-}
-
-void ClusterFit::fastCompress4(Vector3 * start, Vector3 * end)
-{
-    ICBC_ASSERT(m_count == 16);
-    const Vector3 grid = { 31.0f, 63.0f, 31.0f };
-    const Vector3 gridrcp = { 1.0f / 31.0f, 1.0f / 63.0f, 1.0f / 31.0f };
-
-    // declare variables
-    Vector3 beststart = { 0.0f };
-    Vector3 bestend = { 0.0f };
-    float besterror = FLT_MAX;
-
-#if !ICBC_USE_SAT
-    Vector3 x0 = { 0.0f };
-
-    // check all possible clusters for this total order
-    for (uint c0 = 0, i = 0; c0 <= 16; c0++)
-    {
-        Vector3 x1 = { 0.0f };
-
-        for (uint c1 = 0; c1 <= 16 - c0; c1++)
-        {
-            Vector3 x2 = { 0.0f };
-
-            for (uint c2 = 0; c2 <= 16 - c0 - c1; c2++, i++)
-            {
-                float const alpha2_sum = s_fourElement[i].alpha2_sum;
-                float const beta2_sum = s_fourElement[i].beta2_sum;
-                float const alphabeta_sum = s_fourElement[i].alphabeta_sum;
-                float const factor = s_fourElement[i].factor;
-
-                Vector3 const alphax_sum = x0 + x1 * (2.0f / 3.0f) + x2 * (1.0f / 3.0f);
-                Vector3 const betax_sum = m_xsum - alphax_sum;
-
-                Vector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
-                Vector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
-
-                // clamp to the grid
-                a = saturate(a);
-                b = saturate(b);
-#if ICBC_PERFECT_ROUND
-                a = round565(a);
-                b = round565(b);
-#else
-                a = round(grid * a) * gridrcp;
-                b = round(grid * b) * gridrcp;
-#endif
-                // @@ It would be much more accurate to evaluate the error exactly. If we computed the error exactly, then
-                //    we could bake the *factor in alpha2_sum, beta2_sum and alphabeta_sum.
-
-                // compute the error
-                Vector3 e1 = a * a*alpha2_sum + b * b*beta2_sum + 2.0f*(a*b*alphabeta_sum - a * alphax_sum - b * betax_sum);
-
-                // apply the metric to the error term
-                float error = dot(e1, m_metricSqr);
-
-                // keep the solution if it wins
-                if (error < besterror)
-                {
-                    besterror = error;
-                    beststart = a;
-                    bestend = b;
-                }
-
-                x2 += m_colors[c0 + c1 + c2];
-            }
-
-            x1 += m_colors[c0 + c1];
-        }
-
-        x0 += m_colors[c0];
-    }
-#else
-    // This could be done in set colors.
-    Vector3 x_sat[17];
-    //float w_sat[17];
-
-    Vector3 x_sum = { 0 };
-    //float w_sum = 0;
-    for (uint i = 0; i < 17; i++) {
-        x_sat[i] = x_sum;
-        //w_sat[i] = w_sum;
-        x_sum += m_colors[i];
-        //w_sum += m_weights[i];
-    }
-
-    // Ideas:
-    // - Use this method with weighted colors. Use only precomputed counts and summed area tables. Compute alpha/beta factors on the fly.
-    // - We can precompute tables for reduced number of colors. Are these tables subset of each other? Can we simply change the sum? Yes!
-    // - Only do SIMD version of this loop. Lay down table and sat optimally for AVX access patterns.
-
-    // check all possible clusters for this total order
-    for (uint i = 0; i < 969; i+=1)
-    {
-        int c0 = s_fourElement[i].c0;
-        int c01 = s_fourElement[i].c1;
-        int c012 = s_fourElement[i].c2;
-
-        Vector3 x0 = x_sat[c0];
-        //float w0 = w_sat[c0];
-
-        Vector3 x1 = x_sat[c01] - x_sat[c0];
-        //float w1 = w_sat[c01] - w_sat[c0];
-
-        Vector3 x2 = x_sat[c012] - x_sat[c01];
-        //float w2 = w_sat[c012] - w_sat[c01];
-
-        float const alpha2_sum = s_fourElement[i].alpha2_sum;
-        float const beta2_sum = s_fourElement[i].beta2_sum;
-        float const alphabeta_sum = s_fourElement[i].alphabeta_sum;
-        float const factor = s_fourElement[i].factor;
-
-        Vector3 const alphax_sum = x0 + x1 * (2.0f / 3.0f) + x2 * (1.0f / 3.0f);
-        Vector3 const betax_sum = m_xsum - alphax_sum;
-
-        Vector3 a = (alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor;
-        Vector3 b = (betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor;
-
-        // clamp to the grid
-        a = saturate(a);
-        b = saturate(b);
-#if ICBC_PERFECT_ROUND
-        a = round565(a);
-        b = round565(b);
-#else
-        a = round(grid * a) * gridrcp;
-        b = round(grid * b) * gridrcp;
-#endif
-        // @@ It would be much more accurate to evaluate the error exactly.
-
-        // compute the error
-        Vector3 e1 = a * a*alpha2_sum + b * b*beta2_sum +2.0f*(a*b*alphabeta_sum - a * alphax_sum - b * betax_sum);
-
-        // apply the metric to the error term
-        float error = dot(e1, m_metricSqr);
-
-        // keep the solution if it wins
-        if (error < besterror)
-        {
-            besterror = error;
-            beststart = a;
-            bestend = b;
-        }
-    }
-#endif
-
-    *start = beststart;
-    *end = bestend;
-}
-#endif // ICBC_FAST_CLUSTER_FIT
-
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -4234,14 +3710,14 @@ static Options setup_options(Quality level, bool enable_three_color_mode, bool e
 
         case Quality_Level8:            // Cluster fit 3+4, threshold = 256.
             opt.box_fit = true;
-            opt.least_squares_fit = true;
+            opt.least_squares_fit = false;
             opt.cluster_fit = true;
             opt.cluster_fit_3 = enable_three_color_mode;
             opt.threshold = 1.0f / 256;
             break;
 
         case Quality_Level9:           // Cluster fit 3+4, threshold = 256 + Refinement.
-            opt.box_fit = true;
+            opt.box_fit = false;
             opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3 = enable_three_color_mode;
@@ -4261,7 +3737,17 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
     Vector3 colors[16];
     float weights[16];
     bool any_black = false;
-    int count = reduce_colors(input_colors, input_weights, 16, opt.threshold, colors, weights, &any_black);
+    int count;
+    if (opt.cluster_fit) {
+        count = reduce_colors(input_colors, input_weights, 16, opt.threshold, colors, weights, &any_black);
+    }
+    else {
+        for (int i = 0; i < 16; i++) {
+            colors[i] = input_colors[i].xyz;
+        }
+        count = 16;
+    }
+    
 
     if (count == 0) {
         // Output trivial block.
@@ -4433,7 +3919,6 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 // #undef ICBC_USE_FMA
 // #undef ICBC_USE_AVX2_PERMUTE2
 // #undef ICBC_USE_AVX2_PERMUTE
-// #undef ICBC_USE_AVX2_GATHER
 // #undef ICBC_USE_AVX512_PERMUTE
 // #undef ICBC_USE_NEON_VTL
 
@@ -4447,7 +3932,7 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 // v1.00 - Initial release.
 // v1.01 - Added SPMD code path with AVX support.
 // v1.02 - Removed SIMD code path.
-// v1.03 - Adaptive quality modes. AVX512, Neon, Altive, vectorized reduction and index selection.
+// v1.03 - Adaptive quality modes. AVX512, Neon, Altivec, vectorized reduction and index selection.
 
 // Copyright (c) 2020 Ignacio Castano <castano@gmail.com>
 //
