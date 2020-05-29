@@ -113,6 +113,9 @@ namespace ic {
 #if defined(__CYGWIN__)
 #define IC_OS_CYGWIN 1
 #endif
+#if defined(__EMSCRIPTEN_PTHREADS__)
+#define IC_OS_EMSCRIPTEN 1
+#endif
 
 #if IC_OS_WINDOWS || IC_OS_CYGWIN
 #define WIN32_LEAN_AND_MEAN
@@ -134,8 +137,13 @@ namespace ic {
 #import <sys/sysctl.h>
 #endif
 
+#if IC_OS_EMSCRIPTEN
+#include <emscripten/threading.h>
+#endif
+
 #include <stdint.h>
 #include <stdio.h> // snprintf
+
 
 
 #define IC_MAX_THREAD_NAME_LENGTH 32
@@ -314,6 +322,9 @@ static int get_processor_count() {
     }
 
     return numCPU;
+#elif IC_OS_EMSCRIPTEN
+    if (!emscripten_has_threading_support()) return 1;
+    return emscripten_num_logical_cores();
 #else
     return 1; // Assume single core.
 #endif
