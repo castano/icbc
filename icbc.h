@@ -600,7 +600,7 @@ ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
 
 ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
 #if ICBC_USE_RCP
-    #if ICBC_USE_SPMD == ICBC_AVX512
+    #if ICBC_SIMD == ICBC_AVX512
         VFloat r = _mm256_rcp14_ps(a);
     #else
         VFloat r = _mm256_rcp_ps(a);
