@@ -2227,19 +2227,12 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
 
     int bestindex = reduce_min_index(vbesterror);
 
-    // declare variables
-    Vector3 beststart;
-    beststart.x = lane(vbeststart.x, bestindex);
-    beststart.y = lane(vbeststart.y, bestindex);
-    beststart.z = lane(vbeststart.z, bestindex);
-
-    Vector3 bestend;
-    bestend.x = lane(vbestend.x, bestindex);
-    bestend.y = lane(vbestend.y, bestindex);
-    bestend.z = lane(vbestend.z, bestindex);
-
-    *start = beststart;
-    *end = bestend;
+    start->x = lane(vbeststart.x, bestindex);
+    start->y = lane(vbeststart.y, bestindex);
+    start->z = lane(vbeststart.z, bestindex);
+    end->x = lane(vbestend.x, bestindex);
+    end->y = lane(vbestend.y, bestindex);
+    end->z = lane(vbestend.z, bestindex);
 }
 
 
@@ -2690,18 +2683,12 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
 
     int bestindex = reduce_min_index(vbesterror);
 
-    Vector3 beststart;
-    beststart.x = lane(vbeststart.x, bestindex);
-    beststart.y = lane(vbeststart.y, bestindex);
-    beststart.z = lane(vbeststart.z, bestindex);
-
-    Vector3 bestend;
-    bestend.x = lane(vbestend.x, bestindex);
-    bestend.y = lane(vbestend.y, bestindex);
-    bestend.z = lane(vbestend.z, bestindex);
-
-    *start = beststart;
-    *end = bestend;
+    start->x = lane(vbeststart.x, bestindex);
+    start->y = lane(vbeststart.y, bestindex);
+    start->z = lane(vbeststart.z, bestindex);
+    end->x = lane(vbestend.x, bestindex);
+    end->y = lane(vbestend.y, bestindex);
+    end->z = lane(vbestend.z, bestindex);
 }
 
 
