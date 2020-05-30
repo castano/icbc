@@ -3,13 +3,14 @@
 // > cl icbc_test.cpp /O2 /arch:AVX2
 
 // Enable one of these:
-//#define ICBC_USE_SPMD 0         // FLOAT
-//#define ICBC_USE_SPMD 1         // SSE2
-//#define ICBC_USE_SPMD 2         // SSE4.1
-//#define ICBC_USE_SPMD 3         // AVX
-#define ICBC_USE_SPMD 4         // AVX2
-//#define ICBC_USE_SPMD 5         // AVX512
-//#define ICBC_USE_SPMD -1        // NEON
+//#define ICBC_SIMD 0         // FLOAT
+//#define ICBC_SIMD 1         // SSE2
+//#define ICBC_SIMD 2         // SSE4.1
+//#define ICBC_SIMD 3         // AVX
+#define ICBC_SIMD 4         // AVX2
+//#define ICBC_SIMD 5         // AVX512
+//#define ICBC_SIMD -1        // NEON
+//#define ICBC_SIMD -3        // WASM
 
 #define ICBC_IMPLEMENTATION
 #include "icbc.h"
@@ -300,6 +301,7 @@ bool output_dds = false;
 bool output_ktx = false;
 bool output_png = false;
 int repeat_count = 1;
+icbc::Quality quality_level = icbc::Quality_Default;
 
 // Output stats:
 int total_block_count = 0;
@@ -373,7 +375,7 @@ bool encode_image(const char * input_filename) {
                 input_weights[j] = 1.0f;
             }
 
-            icbc::compress_dxt1(input_colors, input_weights, color_weights, /*three_color_mode=*/true, /*hq=*/false, (block_data + b * 8));
+            icbc::compress_dxt1(quality_level, input_colors, input_weights, color_weights, /*three_color_mode=*/true, /*three_color_black=*/true, (block_data + b * 8));
         };
         //});
 
@@ -448,6 +450,13 @@ int main(int argc, char * argv[]) {
         }
         else if (strcmp(argv[i], "-png") == 0) {
             output_png = true;
+        }
+        else if (strncmp(argv[i], "-q", 2) == 0) {
+            if (argv[i][3]) {
+                quality_level = (icbc::Quality)(argv[i][3] - '0');
+                if (quality_level < icbc::Quality_Fast) quality_level = icbc::Quality_Fast;
+                if (quality_level > icbc::Quality_Max) quality_level = icbc::Quality_Max;
+            }
         }
         else if (atoi(argv[i])) {
             repeat_count = atoi(argv[i]);
