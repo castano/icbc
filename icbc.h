@@ -74,6 +74,10 @@ namespace icbc {
 //#define ICBC_USE_FMA 4
 #endif
 
+#if ICBC_SIMD >= ICBC_AVX2
+#define ICBC_BMI2 1
+#endif
+
 // Apparently rcp is not deterministic (different precision on Intel and AMD), enable if you don't care about that for a small performance boost.
 //#define ICBC_USE_RCP 1
 
@@ -2972,6 +2976,25 @@ float evaluate_dxt1_error(const uint8 rgba_block[16*4], const BlockDXT1 * block,
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Index selection
 
+// @@ Can we interleave the two uint16 at once?
+inline uint32 interleave_uint16_with_zeros(uint32 input)  {
+    uint32 word = input;
+    word = (word ^ (word << 8 )) & 0x00ff00ff;
+    word = (word ^ (word << 4 )) & 0x0f0f0f0f;
+    word = (word ^ (word << 2 )) & 0x33333333;
+    word = (word ^ (word << 1 )) & 0x55555555;
+    return word;
+}
+
+// Interleave the bits. https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/
+ICBC_FORCEINLINE uint32 interleave(uint32 a, uint32 b) {
+#if ICBC_BMI2
+    return _pdep_u32(a, 0x55555555) | _pdep_u32(b, 0xaaaaaaaa);
+#else
+    return interleave_uint16_with_zeros(a) | (interleave_uint16_with_zeros(b) << 1);
+#endif
+}
+
 static uint compute_indices4(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
 
     uint indices0 = 0;
@@ -3006,8 +3029,7 @@ static uint compute_indices4(const Vector4 input_colors[16], const Vector3 & col
         indices1 |= mask(x1) << i;
     }
 
-    // Interleave the bits. https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/
-    uint indices = _pdep_u32(indices1, 0x55555555) | _pdep_u32(indices0, 0xaaaaaaaa);
+    uint indices = interleave(indices1, indices0);
     return indices;
 }
 
@@ -3064,8 +3086,7 @@ static uint compute_indices3(const Vector4 input_colors[16], const Vector3 & col
         indices1 |= mask(i1 | i3) << i;
     }
 
-    // Interleave the bits. https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/
-    uint indices = _pdep_u32(indices1, 0x55555555) | _pdep_u32(indices0, 0xaaaaaaaa);
+    uint indices = interleave(indices1, indices0);
     return indices;
 #endif
 }
@@ -3188,8 +3209,7 @@ static uint compute_indices(const Vector4 input_colors[16], const Vector3 & colo
         indices1 |= mask(i1 | i3) << i;
     }
 
-    // Interleave the bits. https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/
-    uint indices = _pdep_u32(indices1, 0x55555555) | _pdep_u32(indices0, 0xaaaaaaaa);
+    uint indices = interleave(indices1, indices0);
     return indices;
 #endif
 }
