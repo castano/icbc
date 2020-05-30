@@ -957,7 +957,7 @@ ICBC_FORCEINLINE VFloat vround(VFloat a) {
 #endif
 }
 
-ICBC_FORCEINLINE VFloat vround(VFloat a) {
+ICBC_FORCEINLINE VFloat vtruncate(VFloat a) {
 #if __ARM_RACH >= 8
     return vrndq_f32(a);
 #else
