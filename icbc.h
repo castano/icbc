@@ -3675,18 +3675,19 @@ static Options setup_options(Quality level, bool enable_three_color_mode, bool e
         case Quality_Level1:            // Box fit + least squares fit.
             opt.box_fit = true;
             opt.least_squares_fit = true;
-            opt.threshold = 1.0f / 128;
+            opt.threshold = 1.0f / 256;
             break;
 
         case Quality_Level2:            // Cluster fit 4, threshold = 24.
             opt.box_fit = true;
-            //opt.least_squares_fit = true;
+            opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 24;
             break;
 
         case Quality_Level3:            // Cluster fit 4, threshold = 32.
+            opt.box_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 32;
