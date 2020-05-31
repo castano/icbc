@@ -127,6 +127,9 @@ namespace icbc {
 #include <altivec.h>
 #endif
 
+#if _MSC_VER
+#include <intrin.h> // _BitScanReverse
+#endif
 
 #include <stdint.h>
 #include <stdlib.h> // abs
