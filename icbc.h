@@ -358,7 +358,7 @@ ICBC_FORCEINLINE VFloat vmadd(VFloat a, VFloat b, VFloat c) { return a * b + c; 
 ICBC_FORCEINLINE VFloat vmsub(VFloat a, VFloat b, VFloat c) { return a * b - c; }
 ICBC_FORCEINLINE VFloat vm2sub(VFloat a, VFloat b, VFloat c, VFloat d) { return a * b - c * d; }
 ICBC_FORCEINLINE VFloat vsaturate(VFloat a) { return min(max(a, 0.0f), 1.0f); }
-ICBC_FORCEINLINE VFloat vround(VFloat a) { return float(int(a + 0.5f)); }
+ICBC_FORCEINLINE VFloat vround01(VFloat a) { return float(int(a + 0.5f)); }
 ICBC_FORCEINLINE VFloat lane_id() { return 0; }
 ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) { return mask ? b : a; }
 ICBC_FORCEINLINE bool all(VMask m) { return m; }
@@ -456,7 +456,7 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
     return _mm_min_ps(_mm_max_ps(a, zero), one);
 }
 
-ICBC_FORCEINLINE VFloat vround(VFloat a) {
+ICBC_FORCEINLINE VFloat vround01(VFloat a) {
 #if ICBC_SIMD == ICBC_SSE41
     return _mm_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 #else
@@ -651,7 +651,7 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
     return _mm256_min_ps(_mm256_max_ps(a, zero), one);
 }
 
-ICBC_FORCEINLINE VFloat vround(VFloat a) {
+ICBC_FORCEINLINE VFloat vround01(VFloat a) {
     return _mm256_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 }
 
@@ -814,7 +814,7 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
     return _mm512_min_ps(_mm512_max_ps(a, zero), one);
 }
 
-ICBC_FORCEINLINE VFloat vround(VFloat a) {
+ICBC_FORCEINLINE VFloat vround01(VFloat a) {
     return _mm512_roundscale_ps(a, _MM_FROUND_TO_NEAREST_INT);
 }
 
@@ -951,7 +951,7 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
     return vminq_f32(vmaxq_f32(a, vzero()), vbroadcast(1));
 }
 
-ICBC_FORCEINLINE VFloat vround(VFloat a) {
+ICBC_FORCEINLINE VFloat vround01(VFloat a) {
 #if __ARM_RACH >= 8
     return vrndqn_f32(a);   // Round to integral (to nearest, ties to even)
 #else
@@ -1143,7 +1143,7 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
     return vec_min(vec_max(a, vzero()), vbroadcast(1));
 }
 
-ICBC_FORCEINLINE VFloat vround(VFloat a) {
+ICBC_FORCEINLINE VFloat vround01(VFloat a) {
     // @@ Assumes a is positive and ~small
     return vec_trunc(a + vbroadcast(0.5));
 }
@@ -1428,7 +1428,7 @@ ICBC_FORCEINLINE VFloat vround5(VFloat x) {
     //return (q + (vbroadcast(1.0f) & (x > mp))) * rb_inv_scale;
     return (q + vselect(x > mp, vzero(), vbroadcast(1))) * rb_inv_scale;
 #else
-    return vround(x * rb_scale) * rb_inv_scale;
+    return vround01(x * rb_scale) * rb_inv_scale;
 #endif
 }
 
@@ -1442,7 +1442,7 @@ ICBC_FORCEINLINE VFloat vround6(VFloat x) {
     //return (q + (vbroadcast(1) & (x > mp))) * g_inv_scale;
     return (q + vselect(x > mp, vzero(), vbroadcast(1))) * g_inv_scale;
 #else
-    return vround(x * g_scale) * g_inv_scale;
+    return vround01(x * g_scale) * g_inv_scale;
 #endif
 }
 
