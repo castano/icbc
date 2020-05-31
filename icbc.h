@@ -3936,7 +3936,7 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 // v1.00 - Initial release.
 // v1.01 - Added SPMD code path with AVX support.
 // v1.02 - Removed SIMD code path.
-// v1.03 - Adaptive quality modes. AVX512, Neon, Altivec, vectorized reduction and index selection.
+// v1.03 - Quality levels. AVX512, Neon, Altivec, vectorized reduction and index selection.
 
 // Copyright (c) 2020 Ignacio Castano <castano@gmail.com>
 //
