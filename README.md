@@ -3,7 +3,7 @@ This is the BC1 texture block encoder used by [NVTT](https://github.com/castano/
 
 Since its initial release I've improved quality and performance. I've added support for multiple quality levels that allow reducing compression time at the cost of some quality, and I've vectorized some of the algorithms to take advantage of the vector units in modern CPUs.
 
-<img src="vector-scaling.png" alt="vector-scaling" title="Vector Scaling." style="zoom: 80%;" />
+<img src="vector-scaling.png" alt="vector-scaling" title="Vector Scaling." style="zoom: 50%;" />
 
 This work was inspired by Rich Geldreich's [RGBCX](https://github.com/richgel999/bc7enc/blob/master/rgbcx.h), which is a close competitor and most likely a better choice if you are looking for a well supported and actively developed library.
 
