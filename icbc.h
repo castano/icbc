@@ -3679,60 +3679,50 @@ static Options setup_options(Quality level, bool enable_three_color_mode, bool e
             break;
 
         case Quality_Level2:            // Cluster fit 4, threshold = 24.
-            opt.box_fit = false;
+            opt.box_fit = true;
+            //opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 24;
             break;
 
         case Quality_Level3:            // Cluster fit 4, threshold = 32.
-            opt.box_fit = false;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 32;
             break;
 
         case Quality_Level4:            // Cluster fit 3+4, threshold = 48.
-            opt.box_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 48;
             break;
 
         case Quality_Level5:            // Cluster fit 3+4, threshold = 64.
-            opt.box_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 64;
             break;
 
         case Quality_Level6:            // Cluster fit 3+4, threshold = 96.
-            opt.box_fit = true;
-            opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 96;
             break;
 
         case Quality_Level7:            // Cluster fit 3+4, threshold = 128.
-            opt.box_fit = true;
-            opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 128;
             break;
 
         case Quality_Level8:            // Cluster fit 3+4, threshold = 256.
-            opt.box_fit = true;
-            opt.least_squares_fit = false;
             opt.cluster_fit = true;
             opt.cluster_fit_3 = enable_three_color_mode;
             opt.threshold = 1.0f / 256;
             break;
 
         case Quality_Level9:           // Cluster fit 3+4, threshold = 256 + Refinement.
-            opt.box_fit = false;
-            opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3 = enable_three_color_mode;
             opt.threshold = 1.0f / 256;
