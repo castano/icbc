@@ -22,4 +22,11 @@ Raspberry Pi - Neon - gcc 8.3 - 2020/05/30
     q8:    RMSE = 6.916	PSNR = 31.333	TIME = 5.098788 (5.079539)
     q9:    RMSE = 6.894	PSNR = 31.361	TIME = 8.725668 (8.707515)
 
+Ivy Bridge - clang 11.0.0 - 2020/05/30
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.242974 (0.225702)
+    AVX1:   RMSE = 6.916    PSNR = 31.333   TIME = 0.386521 (0.370077)
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 0.424463 (0.405616)
+    SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.444171 (0.419927)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 0.959968 (0.941949)
 
+Sky Lake - vc2009 - 2020/05/30
