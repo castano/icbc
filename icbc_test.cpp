@@ -10,6 +10,7 @@
 #define ICBC_SIMD 4         // AVX2
 //#define ICBC_SIMD 5         // AVX512
 //#define ICBC_SIMD -1        // NEON
+//#define ICBC_SIMD -2        // VMX
 //#define ICBC_SIMD -3        // WASM
 
 #define ICBC_IMPLEMENTATION
@@ -452,8 +453,8 @@ int main(int argc, char * argv[]) {
             output_png = true;
         }
         else if (strncmp(argv[i], "-q", 2) == 0) {
-            if (argv[i][3]) {
-                quality_level = (icbc::Quality)(argv[i][3] - '0');
+            if (argv[i][2]) {
+                quality_level = (icbc::Quality)(argv[i][2] - '1');
                 if (quality_level < icbc::Quality_Fast) quality_level = icbc::Quality_Fast;
                 if (quality_level > icbc::Quality_Max) quality_level = icbc::Quality_Max;
             }

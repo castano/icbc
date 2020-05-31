@@ -335,7 +335,7 @@ ICBC_FORCEINLINE int ctz(uint mask) {
     unsigned long index;
     _BitScanReverse(&index, mask);
     return (int)index;
-#endif    
+#endif
 }
 
 
@@ -638,7 +638,7 @@ ICBC_FORCEINLINE VFloat vmsub(VFloat a, VFloat b, VFloat c) {
 #endif
 }
 
-ICBC_FORCEINLINE VFloat vm2sub(VFloat a, VFloat b, VFloat c, VFloat d) { 
+ICBC_FORCEINLINE VFloat vm2sub(VFloat a, VFloat b, VFloat c, VFloat d) {
     return vmsub(a, b, c * d);
 }
 
@@ -693,7 +693,7 @@ ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
     __m128 vhigh = _mm256_extractf128_ps(v, 1);
            vlow  = _mm_min_ps(vlow, vhigh);
 
-    // First do an horizontal reduction.                                // v = [ D C | B A ]                                                                    
+    // First do an horizontal reduction.                                // v = [ D C | B A ]
     __m128 shuf = _mm_shuffle_ps(vlow, vlow, _MM_SHUFFLE(2, 3, 0, 1));  //     [ C D | A B ]
     __m128 mins = _mm_min_ps(vlow, shuf);                            // mins = [ D+C C+D | B+A A+B ]
     shuf        = _mm_movehl_ps(shuf, mins);                         //        [   C   D | D+C C+D ]
@@ -1004,6 +1004,17 @@ ICBC_FORCEINLINE bool any(VMask mask) {
 #endif
 }
 
+// @@ Is this the best we can do?
+// From: https://github.com/jratcliff63367/sse2neon/blob/master/SSE2NEON.h
+ICBC_FORCEINLINE uint mask(VMask mask) {
+	static const uint32x4_t movemask = { 1, 2, 4, 8 };
+	static const uint32x4_t highbit = { 0x80000000, 0x80000000, 0x80000000, 0x80000000 };
+	uint32x4_t t1 = vtstq_u32(mask, highbit);
+	uint32x4_t t2 = vandq_u32(t1, movemask);
+	uint32x2_t t3 = vorr_u32(vget_low_u32(t2), vget_high_u32(t2));
+	return vget_lane_u32(t3, 0) | vget_lane_u32(t3, 1);
+}
+
 inline int reduce_min_index(VFloat v) {
 #if 0
     float32x2_t m2 = vpmin_f32(vget_low_u32(V), vget_high_u32(v));
@@ -1012,7 +1023,7 @@ inline int reduce_min_index(VFloat v) {
     VFloat vmin = vbroadcast(min_value);
 
     // (v <= vmin)
-    
+
     // @@ Find the lane that contains minValue?
 #endif
 
@@ -2980,7 +2991,6 @@ ICBC_FORCEINLINE uint32 interleave(uint32 a, uint32 b) {
 }
 
 static uint compute_indices4(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
-
     uint indices0 = 0;
     uint indices1 = 0;
 
@@ -3013,8 +3023,7 @@ static uint compute_indices4(const Vector4 input_colors[16], const Vector3 & col
         indices1 |= mask(x1) << i;
     }
 
-    uint indices = interleave(indices1, indices0);
-    return indices;
+    return interleave(indices1, indices0);
 }
 
 static uint compute_indices3(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
@@ -3110,9 +3119,7 @@ static uint compute_indices4(const Vector3 input_colors[16], const Vector3 palet
         indices1 |= mask(x1) << i;
     }
 
-    // Interleave the bits. https://lemire.me/blog/2018/01/08/how-fast-can-you-bit-interleave-32-bit-integers/
-    uint indices = _pdep_u32(indices1, 0x55555555) | _pdep_u32(indices0, 0xaaaaaaaa);
-    return indices;
+    return interleave(indices1, indices0);
 #else
     uint indices = 0;
     for (int i = 0; i < 16; i++) {
@@ -3665,64 +3672,55 @@ static Options setup_options(Quality level, bool enable_three_color_mode, bool e
         case Quality_Level1:            // Box fit + least squares fit.
             opt.box_fit = true;
             opt.least_squares_fit = true;
-            opt.threshold = 1.0f / 128;
+            opt.threshold = 1.0f / 256;
             break;
 
         case Quality_Level2:            // Cluster fit 4, threshold = 24.
-            opt.box_fit = false;
+            opt.box_fit = true;
+            opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 24;
             break;
 
         case Quality_Level3:            // Cluster fit 4, threshold = 32.
-            opt.box_fit = false;
+            opt.box_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 32;
             break;
 
         case Quality_Level4:            // Cluster fit 3+4, threshold = 48.
-            opt.box_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 48;
             break;
 
         case Quality_Level5:            // Cluster fit 3+4, threshold = 64.
-            opt.box_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 64;
             break;
 
         case Quality_Level6:            // Cluster fit 3+4, threshold = 96.
-            opt.box_fit = true;
-            opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 96;
             break;
 
         case Quality_Level7:            // Cluster fit 3+4, threshold = 128.
-            opt.box_fit = true;
-            opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3_black_only = enable_three_color_mode && enable_transparent_black;
             opt.threshold = 1.0f / 128;
             break;
 
         case Quality_Level8:            // Cluster fit 3+4, threshold = 256.
-            opt.box_fit = true;
-            opt.least_squares_fit = false;
             opt.cluster_fit = true;
             opt.cluster_fit_3 = enable_three_color_mode;
             opt.threshold = 1.0f / 256;
             break;
 
         case Quality_Level9:           // Cluster fit 3+4, threshold = 256 + Refinement.
-            opt.box_fit = false;
-            opt.least_squares_fit = true;
             opt.cluster_fit = true;
             opt.cluster_fit_3 = enable_three_color_mode;
             opt.threshold = 1.0f / 256;
@@ -3751,7 +3749,6 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
         }
         count = 16;
     }
-    
 
     if (count == 0) {
         // Output trivial block.
