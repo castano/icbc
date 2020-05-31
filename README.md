@@ -3,7 +3,7 @@ This is the BC1 texture block encoder used by [NVTT](https://github.com/castano/
 
 Since its initial release I've improved quality and performance. I've added support for multiple quality levels that allow reducing compression time at the cost of some quality, and I've vectorized some of the algorithms to take advantage of the vector units in modern CPUs.
 
-![vector-scaling](vector-scaling.png "Vector Scaling.")
+<img src="vector-scaling.png" alt="vector-scaling" title="Vector Scaling." style="zoom: 80%;" />
 
 This work was inspired by Rich Geldreich's [RGBCX](https://github.com/richgel999/bc7enc/blob/master/rgbcx.h), which is a close competitor and most likely a better choice if you are looking for a well supported and actively developed library.
 
@@ -11,7 +11,7 @@ This work was inspired by Rich Geldreich's [RGBCX](https://github.com/richgel999
 
 The following chart shows the average PSNR of different BC1 compressors and different configurations on the [Kodim](http://r0k.us/graphics/kodak/) and [Waterloo](http://links.uwaterloo.ca/Repository.html) image sets plotted against the time it took to encode them:
 
-![kodim-chart](kodim-chart.png "PSNR vs Time on Kodim+Waterloo image sets.")
+<img src="kodim-chart.png" alt="kodim-chart" title="PSNR vs Time on Kodim+Waterloo image sets." style="zoom:80%;" />
 
 - ICBC is version 1.03.
 - RGBCx is version 1.12 levels 0 to 18 with `allow_3color` and `use_transparent_texels_for_black` enabled.
