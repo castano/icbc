@@ -1349,45 +1349,6 @@ ICBC_FORCEINLINE VVector3 vm2sub(VVector3 a, VVector3 b, VVector3 c, VVector3 d)
     return v;
 }
 
-extern const float midpoints5[32];
-extern const float midpoints6[64];
-
-ICBC_FORCEINLINE VFloat vround5(VFloat x) {
-    const VFloat rb_scale = vbroadcast(31.0f);
-    const VFloat rb_inv_scale = vbroadcast(1.0f / 31.0f);
-
-#if ICBC_PERFECT_ROUND
-    VFloat q = vtruncate(x * rb_scale);
-    VFloat mp = vgather(midpoints5, q);
-    //return (q + (vbroadcast(1.0f) & (x > mp))) * rb_inv_scale;
-    return (q + vselect(x > mp, vzero(), vbroadcast(1))) * rb_inv_scale;
-#else
-    return vround(x * rb_scale) * rb_inv_scale;
-#endif
-}
-
-ICBC_FORCEINLINE VFloat vround6(VFloat x) {
-    const VFloat g_scale = vbroadcast(63.0f);
-    const VFloat g_inv_scale = vbroadcast(1.0f / 63.0f);
-
-#if ICBC_PERFECT_ROUND
-    VFloat q = vtruncate(x * g_scale);
-    VFloat mp = vgather(midpoints6, q);
-    //return (q + (vbroadcast(1) & (x > mp))) * g_inv_scale;
-    return (q + vselect(x > mp, vzero(), vbroadcast(1))) * g_inv_scale;
-#else
-    return vround(x * g_scale) * g_inv_scale;
-#endif
-}
-
-ICBC_FORCEINLINE VVector3 vround_ept(VVector3 v) {
-    VVector3 r;
-    r.x = vround5(vsaturate(v.x));
-    r.y = vround6(vsaturate(v.y));
-    r.z = vround5(vsaturate(v.z));
-    return r;
-}
-
 ICBC_FORCEINLINE VFloat vdot(VVector3 a, VVector3 b) {
     VFloat r;
     r = a.x * b.x + a.y * b.y + a.z * b.z;
@@ -1442,6 +1403,42 @@ static const float midpoints6[64] = {
     }
     midpoints6[63] = FLT_MAX;
 }*/
+
+ICBC_FORCEINLINE VFloat vround5(VFloat x) {
+    const VFloat rb_scale = vbroadcast(31.0f);
+    const VFloat rb_inv_scale = vbroadcast(1.0f / 31.0f);
+
+#if ICBC_PERFECT_ROUND
+    VFloat q = vtruncate(x * rb_scale);
+    VFloat mp = vgather(midpoints5, q);
+    //return (q + (vbroadcast(1.0f) & (x > mp))) * rb_inv_scale;
+    return (q + vselect(x > mp, vzero(), vbroadcast(1))) * rb_inv_scale;
+#else
+    return vround(x * rb_scale) * rb_inv_scale;
+#endif
+}
+
+ICBC_FORCEINLINE VFloat vround6(VFloat x) {
+    const VFloat g_scale = vbroadcast(63.0f);
+    const VFloat g_inv_scale = vbroadcast(1.0f / 63.0f);
+
+#if ICBC_PERFECT_ROUND
+    VFloat q = vtruncate(x * g_scale);
+    VFloat mp = vgather(midpoints6, q);
+    //return (q + (vbroadcast(1) & (x > mp))) * g_inv_scale;
+    return (q + vselect(x > mp, vzero(), vbroadcast(1))) * g_inv_scale;
+#else
+    return vround(x * g_scale) * g_inv_scale;
+#endif
+}
+
+ICBC_FORCEINLINE VVector3 vround_ept(VVector3 v) {
+    VVector3 r;
+    r.x = vround5(vsaturate(v.x));
+    r.y = vround6(vsaturate(v.y));
+    r.z = vround5(vsaturate(v.z));
+    return r;
+}
 
 static Color16 vector3_to_color16(const Vector3 & v) {
 
