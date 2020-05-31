@@ -454,7 +454,7 @@ int main(int argc, char * argv[]) {
         }
         else if (strncmp(argv[i], "-q", 2) == 0) {
             if (argv[i][2]) {
-                quality_level = (icbc::Quality)(argv[i][2] - '0');
+                quality_level = (icbc::Quality)(argv[i][2] - '1');
                 if (quality_level < icbc::Quality_Fast) quality_level = icbc::Quality_Fast;
                 if (quality_level > icbc::Quality_Max) quality_level = icbc::Quality_Max;
             }
