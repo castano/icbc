@@ -749,8 +749,8 @@ ICBC_FORCEINLINE VInt operator- (VInt A, int b) { return _mm256_sub_epi32(A, _mm
 ICBC_FORCEINLINE VInt operator& (VInt A, int b) { return _mm256_and_si256(A, _mm256_set1_epi32(b)); }
 ICBC_FORCEINLINE VInt operator>> (VInt A, int b) { return _mm256_srli_epi32(A, b); }
 
-ICBC_FORCEINLINE VMask operator> (VInt A, int b) { return _mm256_cmpgt_epi32(A, _mm256_set1_epi32(b)); }
-ICBC_FORCEINLINE VMask operator== (VInt A, int b) { return _mm256_cmpeq_epi32(A, _mm256_set1_epi32(b)); }
+ICBC_FORCEINLINE VMask operator> (VInt A, int b) { return _mm256_castsi256_ps(_mm256_cmpgt_epi32(A, _mm256_set1_epi32(b))); }
+ICBC_FORCEINLINE VMask operator== (VInt A, int b) { return _mm256_castsi256_ps(_mm256_cmpeq_epi32(A, _mm256_set1_epi32(b))); }
 
 // mask ? v[idx] : 0
 ICBC_FORCEINLINE VFloat vpermuteif(VMask mask, VFloat v, VInt idx) {
