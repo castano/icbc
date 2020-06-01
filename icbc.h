@@ -789,6 +789,14 @@ union VFloat {
     VFloat(__m512 v) : v(v) {}
     operator __m512 & () { return v; }
 };
+union VInt {
+    __m512i v;
+    int m512_i32[VEC_SIZE];
+
+    VInt() {}
+    VInt(__m512i v) : v(v) {}
+    operator __m512i & () { return v; }
+};
 #else
 using VFloat = __m512;
 using VInt = __m512i;
@@ -915,6 +923,35 @@ ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
 }
 
 //ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d); // @@
+
+ICBC_FORCEINLINE int lane(VInt v, int i) {
+    //return _mm256_extract_epi32(v, i);
+    return v.m512_i32[i];
+}
+
+ICBC_FORCEINLINE VInt vzeroi() {
+    return _mm512_setzero_epi32();
+}
+
+ICBC_FORCEINLINE VInt vbroadcast(int a) {
+    return _mm512_set1_epi32(a);
+}
+
+ICBC_FORCEINLINE VInt vload(const int * ptr) {
+    return _mm512_load_epi32(ptr);
+}
+
+ICBC_FORCEINLINE VInt operator- (VInt A, int b) { return _mm512_sub_epi32(A, vbroadcast(b)); }
+ICBC_FORCEINLINE VInt operator& (VInt A, int b) { return _mm512_and_si256(A, vbroadcast(b)); }
+ICBC_FORCEINLINE VInt operator>> (VInt A, int b) { return _mm512_srli_epi32(A, b); }
+
+ICBC_FORCEINLINE VMask operator> (VInt A, int b) { return _mm512_cmpgt_epi32_mask(A, vbroadcast(b)); }
+ICBC_FORCEINLINE VMask operator== (VInt A, int b) { return _mm512_cmpeq_epi32_mask(A, vbroadcast(b)); }
+
+// mask ? v[idx] : 0
+ICBC_FORCEINLINE VFloat vpermuteif(VMask mask, VFloat v, VInt idx) {
+    return _mm256_maskz_permutexvar_ps(mask, idx, v);
+}
 
 
 #elif ICBC_SIMD == ICBC_NEON
@@ -2109,23 +2146,21 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         }
 
 #else
-        // Plain scalar path
+        // Scalar path
         x0.x = vzero(); x0.y = vzero(); x0.z = vzero(); w0 = vzero();
         x1.x = vzero(); x1.y = vzero(); x1.z = vzero(); w1 = vzero();
 
         for (int l = 0; l < VEC_SIZE; l++) {
-            uint c0 = s_threeCluster[i + l].c0;
-            if (c0) {
-                c0 -= 1;
+            int c0 = s_threeCluster[i + l].c0 - 1;
+            if (c0 >= 0) {
                 lane(x0.x, l) = sat.r[c0];
                 lane(x0.y, l) = sat.g[c0];
                 lane(x0.z, l) = sat.b[c0];
                 lane(w0, l) = sat.w[c0];
             }
 
-            uint c1 = s_threeCluster[i + l].c1;
-            if (c1) {
-                c1 -= 1;
+            int c1 = s_threeCluster[i + l].c1 - 1;
+            if (c1 >= 0) {
                 lane(x1.x, l) = sat.r[c1];
                 lane(x1.y, l) = sat.g[c1];
                 lane(x1.z, l) = sat.b[c1];
@@ -2232,6 +2267,30 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         VFloat vbsat = vload(loadmask, sat.b, FLT_MAX);
         VFloat vwsat = vload(loadmask, sat.w, FLT_MAX);
 
+#if 0
+        // Load 4 uint8 per lane.
+        VInt packedClusterIndex = vload((int *)&s_fourCluster[i]);
+
+        VInt c0 = (packedClusterIndex & 0xFF) - 1;
+        VInt c1 = ((packedClusterIndex >> 8) & 0xFF) - 1;
+        VInt c2 = ((packedClusterIndex >> 16)) - 1; // @@ No need for &
+
+        x0.x = vpermuteif(c0 >= 0, vrsat, c0);
+        x0.y = vpermuteif(c0 >= 0, vgsat, c0);
+        x0.z = vpermuteif(c0 >= 0, vbsat, c0);
+        w0   = vpermuteif(c0 >= 0, vwsat, c0);
+
+        x1.x = vpermuteif(c1 >= 0, vrsat, c1);
+        x1.y = vpermuteif(c1 >= 0, vgsat, c1);
+        x1.z = vpermuteif(c1 >= 0, vbsat, c1);
+        w1   = vpermuteif(c1 >= 0, vwsat, c1);
+
+        x2.x = vpermuteif(c2 >= 0, vrsat, c2);
+        x2.y = vpermuteif(c2 >= 0, vgsat, c2);
+        x2.z = vpermuteif(c2 >= 0, vbsat, c2);
+        w2   = vpermuteif(c2 >= 0, vwsat, c2);
+#else
+
         // Load 4 uint8 per lane.
         __m512i packedClusterIndex = _mm512_load_si512((__m512i *)&s_fourCluster[i]);
 
@@ -2263,6 +2322,7 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         x2.y = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vgsat));
         x2.z = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vbsat));
         w2 = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vwsat));
+#endif
 
 #elif ICBC_USE_AVX2_PERMUTE2
 
@@ -2410,39 +2470,38 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         }
 
 #else
+
         // Scalar path
         x0.x = vzero(); x0.y = vzero(); x0.z = vzero(); w0 = vzero();
         x1.x = vzero(); x1.y = vzero(); x1.z = vzero(); w1 = vzero();
         x2.x = vzero(); x2.y = vzero(); x2.z = vzero(); w2 = vzero();
 
         for (int l = 0; l < VEC_SIZE; l++) {
-            uint c0 = s_fourCluster[i + l].c0;
-            if (c0) {
-                c0 -= 1;
+            int c0 = s_fourCluster[i + l].c0 - 1;
+            if (c0 >= 0) {
                 lane(x0.x, l) = sat.r[c0];
                 lane(x0.y, l) = sat.g[c0];
                 lane(x0.z, l) = sat.b[c0];
                 lane(w0, l) = sat.w[c0];
             }
 
-            uint c1 = s_fourCluster[i + l].c1;
-            if (c1) {
-                c1 -= 1;
+            int c1 = s_fourCluster[i + l].c1 - 1;
+            if (c1 >= 0) {
                 lane(x1.x, l) = sat.r[c1];
                 lane(x1.y, l) = sat.g[c1];
                 lane(x1.z, l) = sat.b[c1];
                 lane(w1, l) = sat.w[c1];
             }
 
-            uint c2 = s_fourCluster[i + l].c2;
-            if (c2) {
-                c2 -= 1;
+            int c2 = s_fourCluster[i + l].c2 - 1;
+            if (c2 >= 0) {
                 lane(x2.x, l) = sat.r[c2];
                 lane(x2.y, l) = sat.g[c2];
                 lane(x2.z, l) = sat.b[c2];
                 lane(w2, l) = sat.w[c2];
             }
         }
+
 #endif
 
         VFloat w3 = vbroadcast(w_sum) - w2;
