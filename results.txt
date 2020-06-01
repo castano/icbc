@@ -36,3 +36,10 @@ Sky Lake - vc2009/x64 - 2020/05/30
     SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 0.546121 (0.538032)
     SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.605700 (0.598670)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 1.543131 (1.519419)  // Note, compiling with /arch:AVX# produces much slower code.
+
+Haswell - clang 11.0.0 - 2020/05/31
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.568070 (0.545250)
+    AVX1:   RMSE = 6.916    PSNR = 31.333   TIME = 0.875448 (0.849122)
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 1.098958 (1.068698)
+    SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 1.143020 (1.112766)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 2.515645 (2.458320)

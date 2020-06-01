@@ -83,7 +83,6 @@ namespace icbc {
 
 #if ICBC_SIMD == ICBC_AVX2
 #define ICBC_USE_AVX2_PERMUTE2 1    // Using permutevar8x32 and bitops.
-#define ICBC_USE_AVX2_PERMUTE 0     // Using blendv and permutevar8x32.
 #endif
 
 #if ICBC_SIMD == ICBC_AVX512
@@ -549,6 +548,14 @@ union VFloat {
     VFloat(__m256 v) : v(v) {}
     operator __m256 & () { return v; }
 };
+union VInt {
+    __m256i v;
+    int m256_i32[VEC_SIZE];
+
+    VInt() {}
+    VInt(__m256i v) : v(v) {}
+    operator __m256i & () { return v; }
+};
 union VMask {
     __m256 m;
 
@@ -558,6 +565,7 @@ union VMask {
 };
 #else
 using VFloat = __m256;
+using VInt = __m256i;
 using VMask = __m256;   // Emulate mask vector using packed float.
 #endif
 
@@ -570,7 +578,7 @@ ICBC_FORCEINLINE VFloat vzero() {
 }
 
 ICBC_FORCEINLINE VFloat vbroadcast(float a) {
-    return _mm256_broadcast_ss(&a);
+    return _mm256_set1_ps(a);
 }
 
 ICBC_FORCEINLINE VFloat vload(const float * ptr) {
@@ -724,6 +732,49 @@ ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d
     c = _mm256_unpacklo_ps(r2, r3);
     d = _mm256_unpackhi_ps(r2, r3);
 }
+
+ICBC_FORCEINLINE VInt vzeroi() {
+    return _mm256_setzero_si256();
+}
+
+ICBC_FORCEINLINE VInt vbroadcast(int a) {
+    return _mm256_set1_epi32(a);
+}
+
+ICBC_FORCEINLINE VInt vload(const int * ptr) {
+    return _mm256_load_si256((const __m256i*)ptr);
+}
+
+ICBC_FORCEINLINE VInt operator- (VInt A, int b) { return _mm256_sub_epi32(A, _mm256_set1_epi32(b)); }
+ICBC_FORCEINLINE VInt operator& (VInt A, int b) { return _mm256_and_si256(A, _mm256_set1_epi32(b)); }
+ICBC_FORCEINLINE VInt operator>> (VInt A, int b) { return _mm256_srli_epi32(A, b); }
+
+ICBC_FORCEINLINE VMask operator> (VInt A, int b) { return _mm256_cmpgt_epi32(A, _mm256_set1_epi32(b)); }
+ICBC_FORCEINLINE VMask operator== (VInt A, int b) { return _mm256_cmpeq_epi32(A, _mm256_set1_epi32(b)); }
+
+// mask ? v[idx] : 0
+ICBC_FORCEINLINE VFloat vpermuteif(VMask mask, VFloat v, VInt idx) {
+    return _mm256_and_ps(_mm256_permutevar8x32_ps(v, idx), mask);
+}
+
+// mask ? (idx > 8 ? vhi[idx] : vlo[idx]) : 0
+ICBC_FORCEINLINE VFloat vpermute2if(VMask mask, VFloat vlo, VFloat vhi, VInt idx) {
+#if 0
+    VMask mhi = idx > 7;
+    vlo = _mm256_permutevar8x32_ps(vlo, idx);
+    vhi = _mm256_permutevar8x32_ps(vhi, idx);
+    VFloat v = _mm256_blendv_ps(vlo, vhi, mhi);
+    return _mm256_and_ps(v, mask);
+#else
+    // Fabian Giesen says not to mix _mm256_blendv_ps and _mm256_permutevar8x32_ps since they contend for the same gates and instead suggests the following:
+    vhi = _mm256_xor_ps(vhi, vlo);
+    VFloat v = _mm256_permutevar8x32_ps(vlo, idx);
+    VMask mhi = idx > 7;
+    v = _mm256_xor_ps(v, _mm256_and_ps(_mm256_permutevar8x32_ps(vhi, idx), mhi));
+    return _mm256_and_ps(v, mask);
+#endif
+}
+
 
 #elif ICBC_SIMD == ICBC_AVX512
 
@@ -1944,120 +1995,29 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         w1 = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vwsat));
 
 #elif ICBC_USE_AVX2_PERMUTE2
-        // Fabian Giesen says not to mix _mm256_blendv_ps and _mm256_permutevar8x32_ps since they contend for the same gate and instead emulate blendv using bit ops.
-        // On my machine (Intel Skylake) I'm not seeing any performance difference, but this may still be valuable for older CPUs.
 
-        // Load 4 uint8 per lane.
-        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_threeCluster[i]);
+        // Load 4 uint8 per lane. @@ Ideally I should pack this better and load only 2.
+        VInt packedClusterIndex = vload((int *)&s_threeCluster[i]);
+
+        VInt c0 = (packedClusterIndex & 0xFF);
+        VInt c1 = ((packedClusterIndex >> 8)); // No need for & 0xFF
 
         if (count <= 8) {
-
             // Load sat.r in one register:
-            VFloat r07 = vload(sat.r);
-            VFloat g07 = vload(sat.g);
-            VFloat b07 = vload(sat.b);
-            VFloat w07 = vload(sat.w);
+            VFloat rLo = vload(sat.r);
+            VFloat gLo = vload(sat.g);
+            VFloat bLo = vload(sat.b);
+            VFloat wLo = vload(sat.w);
 
-            // Load index and decrement.
-            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
-            auto c0mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
-            c0 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+            x0.x = vpermuteif(c0>0, rLo, c0-1);
+            x0.y = vpermuteif(c0>0, gLo, c0-1);
+            x0.z = vpermuteif(c0>0, bLo, c0-1);
+            w0   = vpermuteif(c0>0, wLo, c0-1);
 
-            // if upper bit set, zero, otherwise load sat entry.
-            x0.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c0), c0mask);
-            x0.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c0), c0mask);
-            x0.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c0), c0mask);
-            w0 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c0), c0mask);
-
-            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
-            auto c1mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c1, _mm256_setzero_si256()));
-            c1 = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
-
-            x1.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c1), c1mask);
-            x1.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c1), c1mask);
-            x1.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c1), c1mask);
-            w1 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c1), c1mask);
-
-        }
-        else {
-            //lo = vload(tab);
-            //upxor = vload(tab + 8) ^ lo;
-            //permute_ind = unpacked_ind - 1;
-            //lookup = permutevar8x32(lo, permute_ind);
-            //is_upper = permute_ind > 7;
-            //lookup ^= permutevar8x32(upxor, permute_ind) & is_upper;
-            //lookup &= unpacked_ind > 0;
-
-            // Load sat.r in two registers:
-            VFloat rLo = vload(sat.r); VFloat rHi = vload(sat.r + 8);
-            VFloat gLo = vload(sat.g); VFloat gHi = vload(sat.g + 8);
-            VFloat bLo = vload(sat.b); VFloat bHi = vload(sat.b + 8);
-            VFloat wLo = vload(sat.w); VFloat wHi = vload(sat.w + 8);
-
-            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
-            auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
-
-            // if upper bit set, zero, otherwise load sat entry.
-            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-
-            auto c0Hi = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
-
-            // if upper bit set, same, otherwise load sat entry.
-            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c0Hi), x0.x, _mm256_castsi256_ps(c0Hi));
-            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c0Hi), x0.y, _mm256_castsi256_ps(c0Hi));
-            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c0Hi), x0.z, _mm256_castsi256_ps(c0Hi));
-            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c0Hi), w0, _mm256_castsi256_ps(c0Hi));
-
-            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
-            auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
-
-            // if upper bit set, zero, otherwise load sat entry.
-            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-
-            auto c1Hi = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
-
-            // if upper bit set, same, otherwise load sat entry.
-            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c1Hi), x1.x, _mm256_castsi256_ps(c1Hi));
-            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c1Hi), x1.y, _mm256_castsi256_ps(c1Hi));
-            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c1Hi), x1.z, _mm256_castsi256_ps(c1Hi));
-            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
-        }
-
-#elif ICBC_USE_AVX2_PERMUTE
-        // Load 4 uint8 per lane.
-        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_threeCluster[i]);
-
-        if (count <= 8) {
-
-            // Load index and decrement.
-            auto c0 = _mm256_sub_epi32(_mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
-            auto c1 = _mm256_sub_epi32(_mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF)), _mm256_set1_epi32(1));
-
-            // Load sat in one register.
-            // if upper bit set, zero, otherwise load sat entry.
-
-            VFloat r07 = vload(sat.r);
-            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-
-            VFloat g07 = vload(sat.g);
-            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-
-            VFloat b07 = vload(sat.b);
-            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-
-            VFloat w07 = vload(sat.w);
-            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-
+            x1.x = vpermuteif(c1>0, rLo, c1-1);
+            x1.y = vpermuteif(c1>0, gLo, c1-1);
+            x1.z = vpermuteif(c1>0, bLo, c1-1);
+            w1   = vpermuteif(c1>0, wLo, c1-1);
         }
         else {
             // Load sat.r in two registers:
@@ -2066,39 +2026,15 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             VFloat bLo = vload(sat.b); VFloat bHi = vload(sat.b + 8);
             VFloat wLo = vload(sat.w); VFloat wHi = vload(sat.w + 8);
 
-            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
-            auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+            x0.x = vpermute2if(c0>0, rLo, rHi, c0-1);
+            x0.y = vpermute2if(c0>0, gLo, gHi, c0-1);
+            x0.z = vpermute2if(c0>0, bLo, bHi, c0-1);
+            w0   = vpermute2if(c0>0, wLo, wHi, c0-1);
 
-            // if upper bit set, zero, otherwise load sat entry.
-            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-
-            auto c0Hi = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
-
-            // if upper bit set, same, otherwise load sat entry.
-            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c0Hi), x0.x, _mm256_castsi256_ps(c0Hi));
-            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c0Hi), x0.y, _mm256_castsi256_ps(c0Hi));
-            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c0Hi), x0.z, _mm256_castsi256_ps(c0Hi));
-            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c0Hi), w0, _mm256_castsi256_ps(c0Hi));
-
-            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
-            auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
-
-            // if upper bit set, zero, otherwise load sat entry.
-            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-
-            auto c1Hi = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
-
-            // if upper bit set, same, otherwise load sat entry.
-            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c1Hi), x1.x, _mm256_castsi256_ps(c1Hi));
-            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c1Hi), x1.y, _mm256_castsi256_ps(c1Hi));
-            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c1Hi), x1.z, _mm256_castsi256_ps(c1Hi));
-            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
+            x1.x = vpermute2if(c1>0, rLo, rHi, c1-1);
+            x1.y = vpermute2if(c1>0, gLo, gHi, c1-1);
+            x1.z = vpermute2if(c1>0, bLo, bHi, c1-1);
+            w1   = vpermute2if(c1>0, wLo, wHi, c1-1);
         }
 
 #elif ICBC_USE_NEON_VTL
@@ -2329,46 +2265,35 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         w2 = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vwsat));
 
 #elif ICBC_USE_AVX2_PERMUTE2
-        // Fabian Giesen says not to mix _mm256_blendv_ps and _mm256_permutevar8x32_ps since they contend for the same resources and instead emulate blendv using bit ops.
 
         // Load 4 uint8 per lane.
-        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_fourCluster[i]);
+        VInt packedClusterIndex = vload((int *)&s_fourCluster[i]);
+
+        VInt c0 = (packedClusterIndex & 0xFF);
+        VInt c1 = ((packedClusterIndex >> 8) & 0xFF);
+        VInt c2 = ((packedClusterIndex >> 16)); // @@ No need for &
 
         if (count <= 8) {
             // Load sat.r in one register:
-            VFloat r07 = vload(sat.r);
-            VFloat g07 = vload(sat.g);
-            VFloat b07 = vload(sat.b);
-            VFloat w07 = vload(sat.w);
+            VFloat rLo = vload(sat.r);
+            VFloat gLo = vload(sat.g);
+            VFloat bLo = vload(sat.b);
+            VFloat wLo = vload(sat.w);
 
-            // Load index and decrement.
-            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
-            auto c0mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
-            c0 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+            x0.x = vpermuteif(c0>0, rLo, c0-1);
+            x0.y = vpermuteif(c0>0, gLo, c0-1);
+            x0.z = vpermuteif(c0>0, bLo, c0-1);
+            w0   = vpermuteif(c0>0, wLo, c0-1);
 
-            // Load sat entry, -1 returns 0.
-            x0.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c0), c0mask);
-            x0.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c0), c0mask);
-            x0.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c0), c0mask);
-            w0 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c0), c0mask);
+            x1.x = vpermuteif(c1>0, rLo, c1-1);
+            x1.y = vpermuteif(c1>0, gLo, c1-1);
+            x1.z = vpermuteif(c1>0, bLo, c1-1);
+            w1   = vpermuteif(c1>0, wLo, c1-1);
 
-            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
-            auto c1mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c1, _mm256_setzero_si256()));
-            c1 = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
-
-            x1.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c1), c1mask);
-            x1.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c1), c1mask);
-            x1.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c1), c1mask);
-            w1 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c1), c1mask);
-
-            auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
-            auto c2mask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c2, _mm256_setzero_si256()));
-            c2 = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
-
-            x2.x = _mm256_and_ps(_mm256_permutevar8x32_ps(r07, c2), c2mask);
-            x2.y = _mm256_and_ps(_mm256_permutevar8x32_ps(g07, c2), c2mask);
-            x2.z = _mm256_and_ps(_mm256_permutevar8x32_ps(b07, c2), c2mask);
-            w2 = _mm256_and_ps(_mm256_permutevar8x32_ps(w07, c2), c2mask);
+            x2.x = vpermuteif(c2>0, rLo, c2-1);
+            x2.y = vpermuteif(c2>0, gLo, c2-1);
+            x2.z = vpermuteif(c2>0, bLo, c2-1);
+            w2   = vpermuteif(c2>0, wLo, c2-1);
         }
         else {
             // Load sat.r in two registers:
@@ -2377,152 +2302,20 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             VFloat bLo = vload(sat.b); VFloat bHi = vload(sat.b + 8);
             VFloat wLo = vload(sat.w); VFloat wHi = vload(sat.w + 8);
 
-            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
-            auto c0LoMask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c0, _mm256_setzero_si256()));
-            auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
+            x0.x = vpermute2if(c0>0, rLo, rHi, c0-1);
+            x0.y = vpermute2if(c0>0, gLo, gHi, c0-1);
+            x0.z = vpermute2if(c0>0, bLo, bHi, c0-1);
+            w0   = vpermute2if(c0>0, wLo, wHi, c0-1);
 
-            // if upper bit set, zero, otherwise load sat entry.
-            x0.x = _mm256_and_ps(_mm256_permutevar8x32_ps(rLo, c0Lo), c0LoMask);
-            x0.y = _mm256_and_ps(_mm256_permutevar8x32_ps(gLo, c0Lo), c0LoMask);
-            x0.z = _mm256_and_ps(_mm256_permutevar8x32_ps(bLo, c0Lo), c0LoMask);
-            w0 = _mm256_and_ps(_mm256_permutevar8x32_ps(wLo, c0Lo), c0LoMask);
+            x1.x = vpermute2if(c1>0, rLo, rHi, c1-1);
+            x1.y = vpermute2if(c1>0, gLo, gHi, c1-1);
+            x1.z = vpermute2if(c1>0, bLo, bHi, c1-1);
+            w1   = vpermute2if(c1>0, wLo, wHi, c1-1);
 
-            auto c0Hi = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
-
-            // if upper bit set, same, otherwise load sat entry.
-            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c0Hi), x0.x, _mm256_castsi256_ps(c0Hi));
-            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c0Hi), x0.y, _mm256_castsi256_ps(c0Hi));
-            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c0Hi), x0.z, _mm256_castsi256_ps(c0Hi));
-            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c0Hi), w0, _mm256_castsi256_ps(c0Hi));
-
-            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
-            auto c1LoMask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c1, _mm256_setzero_si256()));
-            auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
-
-            // if upper bit set, zero, otherwise load sat entry.
-            x1.x = _mm256_and_ps(_mm256_permutevar8x32_ps(rLo, c1Lo), c1LoMask);
-            x1.y = _mm256_and_ps(_mm256_permutevar8x32_ps(gLo, c1Lo), c1LoMask);
-            x1.z = _mm256_and_ps(_mm256_permutevar8x32_ps(bLo, c1Lo), c1LoMask);
-            w1 = _mm256_and_ps(_mm256_permutevar8x32_ps(wLo, c1Lo), c1LoMask);
-
-            auto c1Hi = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
-
-            // if upper bit set, same, otherwise load sat entry.
-            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c1Hi), x1.x, _mm256_castsi256_ps(c1Hi));
-            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c1Hi), x1.y, _mm256_castsi256_ps(c1Hi));
-            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c1Hi), x1.z, _mm256_castsi256_ps(c1Hi));
-            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
-
-            auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
-            auto c2LoMask = _mm256_castsi256_ps(_mm256_cmpgt_epi32(c2, _mm256_setzero_si256()));
-            auto c2Lo = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
-
-            // if upper bit set, zero, otherwise load sat entry.
-            x2.x = _mm256_and_ps(_mm256_permutevar8x32_ps(rLo, c2Lo), c2LoMask);
-            x2.y = _mm256_and_ps(_mm256_permutevar8x32_ps(gLo, c2Lo), c2LoMask);
-            x2.z = _mm256_and_ps(_mm256_permutevar8x32_ps(bLo, c2Lo), c2LoMask);
-            w2 = _mm256_and_ps(_mm256_permutevar8x32_ps(wLo, c2Lo), c2LoMask);
-
-            auto c2Hi = _mm256_sub_epi32(c2, _mm256_set1_epi32(9));
-
-            // if upper bit set, same, otherwise load sat entry.
-            x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c2Hi), x2.x, _mm256_castsi256_ps(c2Hi));
-            x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c2Hi), x2.y, _mm256_castsi256_ps(c2Hi));
-            x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c2Hi), x2.z, _mm256_castsi256_ps(c2Hi));
-            w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c2Hi), w2, _mm256_castsi256_ps(c2Hi));
-    }
-
-#elif ICBC_USE_AVX2_PERMUTE
-        // Load 4 uint8 per lane.
-        __m256i packedClusterIndex = _mm256_load_si256((__m256i *)&s_fourCluster[i]);
-
-        if (count <= 8) {
-            // Load index and decrement.
-            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
-            c0 = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
-
-            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
-            c1 = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
-
-            auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
-            c2 = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
-
-            // if upper bit set, zero, otherwise load sat entry.
-            VFloat r07 = vload(sat.r);
-            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(r07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
-
-            VFloat g07 = vload(sat.g);
-            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(g07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
-
-            VFloat b07 = vload(sat.b);
-            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(b07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
-
-            VFloat w07 = vload(sat.w);
-            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c0), _mm256_setzero_ps(), _mm256_castsi256_ps(c0));
-            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c1), _mm256_setzero_ps(), _mm256_castsi256_ps(c1));
-            w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(w07, c2), _mm256_setzero_ps(), _mm256_castsi256_ps(c2));
-
-        }
-        else {
-            // Unpack indices.
-            auto c0 = _mm256_and_si256(packedClusterIndex, _mm256_set1_epi32(0xFF));
-            auto c0Lo = _mm256_sub_epi32(c0, _mm256_set1_epi32(1));
-            auto c0Hi = _mm256_sub_epi32(c0, _mm256_set1_epi32(9));
-
-            auto c1 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 8), _mm256_set1_epi32(0xFF));
-            auto c1Lo = _mm256_sub_epi32(c1, _mm256_set1_epi32(1));
-            auto c1Hi = _mm256_sub_epi32(c1, _mm256_set1_epi32(9));
-
-            auto c2 = _mm256_and_si256(_mm256_srli_epi32(packedClusterIndex, 16), _mm256_set1_epi32(0xFF));
-            auto c2Lo = _mm256_sub_epi32(c2, _mm256_set1_epi32(1));
-            auto c2Hi = _mm256_sub_epi32(c2, _mm256_set1_epi32(9));
-
-            // if upper bit set, zero, otherwise load sat entry.
-            VFloat rLo = vload(sat.r);
-            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
-
-            VFloat rHi = vload(sat.r + 8);
-            x0.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c0Hi), x0.x, _mm256_castsi256_ps(c0Hi));
-            x1.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c1Hi), x1.x, _mm256_castsi256_ps(c1Hi));
-            x2.x = _mm256_blendv_ps(_mm256_permutevar8x32_ps(rHi, c2Hi), x2.x, _mm256_castsi256_ps(c2Hi));
-
-            VFloat gLo = vload(sat.g);
-            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
-
-            VFloat gHi = vload(sat.g + 8);
-            x0.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c0Hi), x0.y, _mm256_castsi256_ps(c0Hi));
-            x1.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c1Hi), x1.y, _mm256_castsi256_ps(c1Hi));
-            x2.y = _mm256_blendv_ps(_mm256_permutevar8x32_ps(gHi, c2Hi), x2.y, _mm256_castsi256_ps(c2Hi));
-
-            VFloat bLo = vload(sat.b);
-            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
-
-            VFloat bHi = vload(sat.b + 8);
-            x0.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c0Hi), x0.z, _mm256_castsi256_ps(c0Hi));
-            x1.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c1Hi), x1.z, _mm256_castsi256_ps(c1Hi));
-            x2.z = _mm256_blendv_ps(_mm256_permutevar8x32_ps(bHi, c2Hi), x2.z, _mm256_castsi256_ps(c2Hi));
-
-            VFloat wLo = vload(sat.w);
-            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c0Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c0Lo));
-            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c1Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c1Lo));
-            w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wLo, c2Lo), _mm256_setzero_ps(), _mm256_castsi256_ps(c2Lo));
-
-            VFloat wHi = vload(sat.w + 8);
-            w0 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c0Hi), w0, _mm256_castsi256_ps(c0Hi));
-            w1 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c1Hi), w1, _mm256_castsi256_ps(c1Hi));
-            w2 = _mm256_blendv_ps(_mm256_permutevar8x32_ps(wHi, c2Hi), w2, _mm256_castsi256_ps(c2Hi));
+            x2.x = vpermute2if(c2>0, rLo, rHi, c2-1);
+            x2.y = vpermute2if(c2>0, gLo, gHi, c2-1);
+            x2.z = vpermute2if(c2>0, bLo, bHi, c2-1);
+            w2   = vpermute2if(c2>0, wLo, wHi, c2-1);
         }
 
 #elif ICBC_USE_NEON_VTL
@@ -3922,7 +3715,6 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 
 // #undef ICBC_USE_FMA
 // #undef ICBC_USE_AVX2_PERMUTE2
-// #undef ICBC_USE_AVX2_PERMUTE
 // #undef ICBC_USE_AVX512_PERMUTE
 // #undef ICBC_USE_NEON_VTL
 
