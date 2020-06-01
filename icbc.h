@@ -791,7 +791,7 @@ union VFloat {
 };
 union VInt {
     __m512i v;
-    int m512_i32[VEC_SIZE];
+    int m512i_i32[VEC_SIZE];
 
     VInt() {}
     VInt(__m512i v) : v(v) {}
@@ -926,7 +926,7 @@ ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
 
 ICBC_FORCEINLINE int lane(VInt v, int i) {
     //return _mm256_extract_epi32(v, i);
-    return v.m512_i32[i];
+    return v.m512i_i32[i];
 }
 
 ICBC_FORCEINLINE VInt vzeroi() {
@@ -942,15 +942,16 @@ ICBC_FORCEINLINE VInt vload(const int * ptr) {
 }
 
 ICBC_FORCEINLINE VInt operator- (VInt A, int b) { return _mm512_sub_epi32(A, vbroadcast(b)); }
-ICBC_FORCEINLINE VInt operator& (VInt A, int b) { return _mm512_and_si256(A, vbroadcast(b)); }
+ICBC_FORCEINLINE VInt operator& (VInt A, int b) { return _mm512_and_epi32(A, vbroadcast(b)); }
 ICBC_FORCEINLINE VInt operator>> (VInt A, int b) { return _mm512_srli_epi32(A, b); }
 
-ICBC_FORCEINLINE VMask operator> (VInt A, int b) { return _mm512_cmpgt_epi32_mask(A, vbroadcast(b)); }
-ICBC_FORCEINLINE VMask operator== (VInt A, int b) { return _mm512_cmpeq_epi32_mask(A, vbroadcast(b)); }
+ICBC_FORCEINLINE VMask operator> (VInt A, int b) { return { _mm512_cmpgt_epi32_mask(A, vbroadcast(b)) }; }
+ICBC_FORCEINLINE VMask operator>=(VInt A, int b) { return { _mm512_cmpge_epi32_mask(A, vbroadcast(b)) }; }
+ICBC_FORCEINLINE VMask operator== (VInt A, int b) { return { _mm512_cmpeq_epi32_mask(A, vbroadcast(b)) }; }
 
 // mask ? v[idx] : 0
 ICBC_FORCEINLINE VFloat vpermuteif(VMask mask, VFloat v, VInt idx) {
-    return _mm256_maskz_permutexvar_ps(mask, idx, v);
+    return _mm512_maskz_permutexvar_ps(mask.m, idx, v);
 }
 
 
@@ -2008,28 +2009,21 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         VFloat vwsat = vload(loadmask, sat.w, FLT_MAX);
 
         // Load 4 uint8 per lane.
-        __m512i packedClusterIndex = _mm512_load_si512((__m512i *)&s_threeCluster[i]);
+        VInt packedClusterIndex = vload((int *)&s_threeCluster[i]);
 
-        // Load index and decrement.
-        auto c0 = _mm512_and_epi32(packedClusterIndex, _mm512_set1_epi32(0xFF));
-        auto c0mask = _mm512_cmpgt_epi32_mask(c0, _mm512_setzero_si512());
-        c0 = _mm512_sub_epi32(c0, _mm512_set1_epi32(1));
+        VInt c0 = (packedClusterIndex & 0xFF) - 1;
+        VInt c1 = (packedClusterIndex >> 8) - 1;
 
-        // @@ Avoid blend_ps?
-        // if upper bit set, zero, otherwise load sat entry.
-        x0.x = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vrsat));
-        x0.y = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vgsat));
-        x0.z = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vbsat));
-        w0 = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vwsat));
+        x0.x = vpermuteif(c0 >= 0, vrsat, c0);
+        x0.y = vpermuteif(c0 >= 0, vgsat, c0);
+        x0.z = vpermuteif(c0 >= 0, vbsat, c0);
+        w0   = vpermuteif(c0 >= 0, vwsat, c0);
 
-        auto c1 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 8), _mm512_set1_epi32(0xFF));
-        auto c1mask = _mm512_cmpgt_epi32_mask(c1, _mm512_setzero_si512());
-        c1 = _mm512_sub_epi32(c1, _mm512_set1_epi32(1));
+        x1.x = vpermuteif(c1 >= 0, vrsat, c1);
+        x1.y = vpermuteif(c1 >= 0, vgsat, c1);
+        x1.z = vpermuteif(c1 >= 0, vbsat, c1);
+        w1   = vpermuteif(c1 >= 0, vwsat, c1);
 
-        x1.x = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vrsat));
-        x1.y = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vgsat));
-        x1.z = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vbsat));
-        w1 = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vwsat));
 
 #elif ICBC_USE_AVX2_PERMUTE2
 
@@ -2267,7 +2261,6 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         VFloat vbsat = vload(loadmask, sat.b, FLT_MAX);
         VFloat vwsat = vload(loadmask, sat.w, FLT_MAX);
 
-#if 0
         // Load 4 uint8 per lane.
         VInt packedClusterIndex = vload((int *)&s_fourCluster[i]);
 
@@ -2289,40 +2282,6 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         x2.y = vpermuteif(c2 >= 0, vgsat, c2);
         x2.z = vpermuteif(c2 >= 0, vbsat, c2);
         w2   = vpermuteif(c2 >= 0, vwsat, c2);
-#else
-
-        // Load 4 uint8 per lane.
-        __m512i packedClusterIndex = _mm512_load_si512((__m512i *)&s_fourCluster[i]);
-
-        // Load index and decrement.
-        auto c0 = _mm512_and_epi32(packedClusterIndex, _mm512_set1_epi32(0xFF));
-        auto c0mask = _mm512_cmpgt_epi32_mask(c0, _mm512_setzero_si512());
-        c0 = _mm512_sub_epi32(c0, _mm512_set1_epi32(1));
-
-        // if upper bit set, zero, otherwise load sat entry.
-        x0.x = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vrsat));
-        x0.y = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vgsat));
-        x0.z = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vbsat));
-        w0 = _mm512_mask_blend_ps(c0mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c0, vwsat));
-
-        auto c1 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 8), _mm512_set1_epi32(0xFF));
-        auto c1mask = _mm512_cmpgt_epi32_mask(c1, _mm512_setzero_si512());
-        c1 = _mm512_sub_epi32(c1, _mm512_set1_epi32(1));
-
-        x1.x = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vrsat));
-        x1.y = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vgsat));
-        x1.z = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vbsat));
-        w1 = _mm512_mask_blend_ps(c1mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c1, vwsat));
-
-        auto c2 = _mm512_and_epi32(_mm512_srli_epi32(packedClusterIndex, 16), _mm512_set1_epi32(0xFF));
-        auto c2mask = _mm512_cmpgt_epi32_mask(c2, _mm512_setzero_si512());
-        c2 = _mm512_sub_epi32(c2, _mm512_set1_epi32(1));
-
-        x2.x = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vrsat));
-        x2.y = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vgsat));
-        x2.z = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vbsat));
-        w2 = _mm512_mask_blend_ps(c2mask, _mm512_setzero_ps(), _mm512_permutexvar_ps(c2, vwsat));
-#endif
 
 #elif ICBC_USE_AVX2_PERMUTE2
 

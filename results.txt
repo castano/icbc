@@ -44,5 +44,9 @@ Haswell - clang 11.0.0 - 2020/05/31
     SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 1.143020 (1.112766)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 2.515645 (2.458320)
 
-Sky Lake - vc2009/x64 - 2020/05/30
+Sky Lake - vc2009/x64 - 2020/05/31
+    AVX512: RMSE = 6.916    PSNR = 31.333   TIME = 0.166147 (0.161710)
     AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.271278 (0.265888)
+
+
+    
