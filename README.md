@@ -13,7 +13,7 @@ The following chart shows the average PSNR of different BC1 compressors and diff
 
 <img src="kodim-chart.png" alt="kodim-chart" title="PSNR vs Time on Kodim+Waterloo image sets."  />
 
-- ICBC is version 1.03.
+- ICBC is version 1.03 with `three_color_mode` and `three_color_black` set to `true`.
 - RGBCx is version 1.12 levels 0 to 18 with `allow_3color` and `use_transparent_texels_for_black` enabled.
 - stb is stb_dxt version 1.09 with various improvements that Rich and I have proposed.
 - squish is version 1.15
