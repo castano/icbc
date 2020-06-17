@@ -1603,6 +1603,7 @@ inline bool is_black(Vector3 c) {
 // Find similar colors and combine them together.
 static int reduce_colors(const Vector4 * input_colors, const float * input_weights, int count, float threshold, Vector3 * colors, float * weights, bool * any_black)
 {
+    ZoneScoped;
 #if 0
     for (int i = 0; i < 16; i++) {
         colors[i] = input_colors[i].xyz;
@@ -1777,6 +1778,8 @@ struct SummedAreaTable {
 
 int compute_sat(const Vector3 * colors, const float * weights, int count, SummedAreaTable * sat)
 {
+    ZoneScoped;
+
     // I've tried using a lower quality approximation of the principal direction, but the best fit line seems to produce best results.
     Vector3 principal = computePrincipalComponent_PowerMethod(count, colors, weights);
 
@@ -1981,6 +1984,8 @@ static void init_cluster_tables() {
 
 static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 metric_sqr, Vector3 * start, Vector3 * end)
 {
+    ZoneScoped;
+
     const float r_sum = sat.r[count-1];
     const float g_sum = sat.g[count-1];
     const float b_sum = sat.b[count-1];
@@ -2214,6 +2219,8 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
 
 static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 metric_sqr, Vector3 * start, Vector3 * end)
 {
+    ZoneScoped;
+
     const float r_sum = sat.r[count-1];
     const float g_sum = sat.g[count-1];
     const float b_sum = sat.b[count-1];
@@ -3391,6 +3398,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
 
 
 static float refine_endpoints(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, float input_error, BlockDXT1 * output) {
+    ZoneScoped;
     // TODO:
     // - Optimize palette evaluation when updating only one channel.
     // - try all diagonals.
@@ -3548,6 +3556,7 @@ static Options setup_options(Quality level, bool enable_three_color_mode, bool e
 
 static float compress_dxt1(Quality level, const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, bool three_color_black, BlockDXT1 * output)
 {
+    ZoneScoped;
     Options opt = setup_options(level, three_color_mode, three_color_black);
 
     Vector3 colors[16];

@@ -13,6 +13,9 @@
 //#define ICBC_SIMD -2        // VMX
 //#define ICBC_SIMD -3        // WASM
 
+//#define TRACY_ENABLE
+#include "tracy/Tracy.hpp"
+
 #define ICBC_IMPLEMENTATION
 #include "icbc.h"
 
