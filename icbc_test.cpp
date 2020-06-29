@@ -7,14 +7,17 @@
 //#define ICBC_SIMD 1         // SSE2
 //#define ICBC_SIMD 2         // SSE4.1
 //#define ICBC_SIMD 3         // AVX
-#define ICBC_SIMD 4         // AVX2
-//#define ICBC_SIMD 5         // AVX512
+//#define ICBC_SIMD 4         // AVX2
+#define ICBC_SIMD 5         // AVX512
 //#define ICBC_SIMD -1        // NEON
 //#define ICBC_SIMD -2        // VMX
 //#define ICBC_SIMD -3        // WASM
 
 #define ICBC_IMPLEMENTATION
-#include "icbc.h"
+#include "icbc_dispatch.h"
+//#include "icbc.h"
+
+
 
 // stb_image from: https://github.com/nothings/stb/blob/master/stb_image.h
 #define STB_IMAGE_IMPLEMENTATION
@@ -22,8 +25,6 @@
 
 #define IC_PFOR_IMPLEMENTATION
 #include "ic_pfor.h"
-
-
 
 #include <stdio.h>
 #include <stdint.h>
@@ -289,10 +290,13 @@ static float evaluate_dxt1_mse(u8 * rgba, u8 * block, int block_count, icbc::Dec
     return float(total / (16 * block_count));
 }
 
+template <typename T> inline T clamp(const T & x, const T & a, const T & b) {
+    return min(max(x, a), b);
+}
 
 static float mse_to_psnr(float mse) {
     float rms = sqrtf(mse);
-    float psnr = rms ? (float)icbc::clamp(log10(255.0 / rms) * 20.0, 0.0, 300.0) : 1e+10f;
+    float psnr = rms ? (float)clamp(log10(255.0 / rms) * 20.0, 0.0, 300.0) : 1e+10f;
     return psnr;
 }
 
@@ -442,6 +446,8 @@ static const int image_count = sizeof(images) / sizeof(images[0]);
 
 int main(int argc, char * argv[]) {
 
+    int thread_count = 0;
+
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-dds") == 0) {
             output_dds = true;
@@ -459,13 +465,18 @@ int main(int argc, char * argv[]) {
                 if (quality_level > icbc::Quality_Max) quality_level = icbc::Quality_Max;
             }
         }
+        else if (strncmp(argv[i], "-t", 2) == 0) {
+            if (argv[i][2]) {
+                thread_count = argv[i][2] - '0';
+            }
+        }
         else if (atoi(argv[i])) {
             repeat_count = atoi(argv[i]);
         }
     }
 
     icbc::init_dxt1();
-    int thread_count = ic::init_pfor();
+    thread_count = ic::init_pfor(thread_count);
     printf("Using %d threads.\n", thread_count);
 
     for (int i = 0; i < image_count; i++) {
