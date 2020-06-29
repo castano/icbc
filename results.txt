@@ -48,5 +48,9 @@ Sky Lake - vc2009/x64 - 2020/05/31
     AVX512: RMSE = 6.916    PSNR = 31.333   TIME = 0.166147 (0.161710)
     AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.271278 (0.265888)
 
+Raspberry Pi - Neon - gcc 8.3 - 2020/06/11
+	RMSE = 6.916	PSNR = 31.333	TIME = 4.869383 (4.837136)
 
-    
+Rasperry Pi - Float - gcc 8.3 - 2020/06/11
+    RMSE = 6.916	PSNR = 31.333	TIME = 9.983787 (9.971635)
+
