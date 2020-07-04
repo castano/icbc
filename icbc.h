@@ -1,4 +1,4 @@
-// icbc.h v1.03
+// icbc.h v1.04
 // A High Quality SIMD BC1 Encoder by Ignacio Castano <castano@gmail.com>.
 //
 // LICENSE:
@@ -3729,6 +3729,7 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 // v1.01 - Added SPMD code path with AVX support.
 // v1.02 - Removed SIMD code path.
 // v1.03 - Quality levels. AVX512, Neon, Altivec, vectorized reduction and index selection.
+// v1.04 - Dynamic CPU dispatch.
 
 // Copyright (c) 2020 Ignacio Castano <castano@gmail.com>
 //
