@@ -3315,35 +3315,6 @@ static void compress_dxt1_single_color_optimal(Color32 c, BlockDXT1 * output)
 }
 
 
-// Compress block using the average color.
-static float compress_dxt1_single_color(const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, BlockDXT1 * output)
-{
-    // Compute block average.
-    Vector3 color_sum = { 0,0,0 };
-    float weight_sum = 0;
-
-    for (int i = 0; i < count; i++) {
-        color_sum += colors[i] * weights[i];
-        weight_sum += weights[i];
-    }
-
-    // Compress optimally.
-    compress_dxt1_single_color_optimal(vector3_to_color32(color_sum / weight_sum), output);
-
-    // Decompress block color.
-    Color32 palette[4];
-    evaluate_palette(output->col0, output->col1, palette);
-
-    Vector3 block_color = color_to_vector3(palette[output->indices & 0x3]);
-
-    // Evaluate error.
-    float error = 0;
-    for (int i = 0; i < count; i++) {
-        error += weights[i] * evaluate_mse(block_color, colors[i], color_weights);
-    }
-    return error;
-}
-
 static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, bool use_transparent_black, BlockDXT1 * output)
 {
     Vector3 metric_sqr = color_weights * color_weights;
