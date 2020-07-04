@@ -8,7 +8,7 @@
 //#define ICBC_SIMD 2         // SSE4.1
 //#define ICBC_SIMD 3         // AVX
 //#define ICBC_SIMD 4         // AVX2
-//#define ICBC_SIMD 5         // AVX512
+#define ICBC_SIMD 5         // AVX512
 //#define ICBC_SIMD -1        // NEON
 //#define ICBC_SIMD -2        // VMX
 //#define ICBC_SIMD -3        // WASM
@@ -274,6 +274,22 @@ static bool output_dxt_png(u32 w, u32 h, const u8* data, const char * filename) 
 }
 
 
+///////////////////////////////////////////////////////////////////////////////////////////////////
+// Basic Templates
+
+template <typename T> inline T max(const T & a, const T & b) {
+    return (b < a) ? a : b;
+}
+
+template <typename T> inline T min(const T & a, const T & b) {
+    return (a < b) ? a : b;
+}
+
+template <typename T> inline T clamp(const T & x, const T & a, const T & b) {
+    return min(max(x, a), b);
+}
+
+
 ////////////////////////////////
 // DXT
 
@@ -286,10 +302,6 @@ static float evaluate_dxt1_mse(u8 * rgba, u8 * block, int block_count, icbc::Dec
         block += 8;
     }
     return float(total / (16 * block_count));
-}
-
-template <typename T> inline T clamp(const T & x, const T & a, const T & b) {
-    return min(max(x, a), b);
 }
 
 static float mse_to_psnr(float mse) {
@@ -475,7 +487,10 @@ int main(int argc, char * argv[]) {
 
     icbc::init_dxt1();
     thread_count = ic::init_pfor(thread_count);
-    printf("Using %d threads.\n", thread_count);
+    //printf("Using %d threads.\n", thread_count);
+
+    static const char * simd_names[] = { "no simd", "SSE2", "SSE4.1", "AVX", "AVX2", "AVX512", "Neon", "Altivec" };
+    printf("Using %d threads and %s extensions.\n", thread_count, simd_names[icbc::simd_version]);
 
     for (int i = 0; i < image_count; i++) {
         encode_image(images[i]);

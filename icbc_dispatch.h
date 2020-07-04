@@ -7,11 +7,6 @@
 #ifndef ICBC_DISPATCH_H
 #define ICBC_DISPATCH_H
 
-#define ICBC_X86 1
-//#define ICBC_X64    (defined(__x86_64__) || defined(_M_X64))
-//#define ICBC_X86    !ICBC_X64 && (defined(__i386__) || defined(_M_IX86))
-//#define ICBC_ARM
-
 namespace icbc {
 
     void init_dxt1();
@@ -42,6 +37,7 @@ namespace icbc {
 
     void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
     float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * block, Decoder decoder = Decoder_D3D10);
+
 }
 
 #endif // ICBC_DISPATCH_H
@@ -56,12 +52,13 @@ namespace icbc {
 #undef icbc
 
 // If x86:
-//#if ICBC_X86 || ICBC_X64
+#if ICBC_X86
     #define ICBC_SIMD ICBC_SSE2
     #define icbc icbc_sse2
     #include "icbc.h"
     #undef ICBC_H
     #undef icbc
+
 
     #define ICBC_SIMD ICBC_SSE41
     #define icbc icbc_sse41
@@ -69,11 +66,13 @@ namespace icbc {
     #undef ICBC_H
     #undef icbc
 
+
     #define ICBC_SIMD ICBC_AVX1
     #define icbc icbc_avx1
     #include "icbc.h"
     #undef ICBC_H
     #undef icbc
+
 
     #define ICBC_SIMD ICBC_AVX2
     #define icbc icbc_avx2
@@ -81,21 +80,23 @@ namespace icbc {
     #undef ICBC_H
     #undef icbc
 
+
     #define ICBC_SIMD ICBC_AVX512
     #define icbc icbc_avx512
     #include "icbc.h"
     #undef ICBC_H
     #undef icbc
-//#endif
+#endif
 
 // If ARM:
-/*#if ICBC_ARM
-    #define ICBC_SIMD -1
+#if ICBC_ARM
+    #define ICBC_SIMD ICBC_NEON
     #define icbc icbc_neon
     #include "icbc.h"
-#endif*/
+    #undef ICBC_H
+    #undef icbc
+#endif
 
-#undef icbc
 
 namespace icbc {
 
@@ -176,7 +177,7 @@ inline void detect_simd_version() {
 
         // Check for AVX2 and BMI2
         uint32_t AVX2_BMI12_CPUID_MASK = (1 << 5) | (1 << 3) | (1 << 8);
-        if ((abcd[1] & AVX2_BMI12_CPUID_MASK) != AVX2_BMI12_CPUID_MASK) {
+        if ((abcd[1] & AVX2_BMI12_CPUID_MASK) == AVX2_BMI12_CPUID_MASK) {
             simd_version = ICBC_AVX2;
         }
 
@@ -188,7 +189,7 @@ inline void detect_simd_version() {
 
         // Check for AVX512F
         uint32_t AVX512F_CPUID_MASK = (1 << 16);
-        if ((abcd[1] & AVX512F_CPUID_MASK) != AVX512F_CPUID_MASK) {
+        if ((abcd[1] & AVX512F_CPUID_MASK) == AVX512F_CPUID_MASK) {
             simd_version = ICBC_AVX512;
         }
     }
@@ -198,7 +199,6 @@ inline void detect_simd_version() {
 void init_dxt1() {
     
     detect_simd_version();
-    printf("SIMD version = %d\n", simd_version);
 
     switch(simd_version) {
     #if ICBC_X86

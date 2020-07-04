@@ -50,22 +50,33 @@ namespace icbc {
 #ifdef ICBC_IMPLEMENTATION
 
 // Instruction level support must be chosen at compile time setting ICBC_SIMD to one of these values:
-#define ICBC_FLOAT  0
+#define ICBC_AUTO  -1
+#define ICBC_FLOAT  0   // @@ Rename 'ICBC_SCALAR'.
 #define ICBC_SSE2   1
 #define ICBC_SSE41  2
 #define ICBC_AVX1   3
 #define ICBC_AVX2   4
 #define ICBC_AVX512 5
-#define ICBC_NEON   -1
-#define ICBC_VMX    -2
+#define ICBC_NEON   6
+#define ICBC_VMX    7
 
-// SIMD version. (FLOAT=0, SSE2=1, SSE41=2, AVX1=3, AVX2=4, AVX512=5, NEON=-1, VMX=-2)
+#define ICBC_X86    (defined(__i386__) || defined(_M_IX86) || defined(__x86_64__) || defined(_M_X64))
+#define ICBC_ARM    (defined(__arm__) || defined(_M_ARM))
+#define ICBC_PPC    (defined(__PPC__) || defined(_M_PPC))
+
+// SIMD version. (FLOAT=0, SSE2=1, SSE41=2, AVX1=3, AVX2=4, AVX512=5, NEON=6, VMX=7)
 #ifndef ICBC_SIMD
-#if _M_ARM
-#define ICBC_SIMD -1
-#else
-#define ICBC_SIMD 5
-#endif
+    #if ICBC_X86
+    #define ICBC_SIMD ICBC_AVX512 // @@ Default to auto.
+    #endif
+
+    #if ICBC_ARM
+    #define ICBC_SIMD ICBC_NEON
+    #endif
+
+    #if ICBC_PPC
+    #define ICBC_SIMD ICBC_VMX
+    #endif
 #endif
 
 // AVX1 does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
@@ -102,28 +113,34 @@ namespace icbc {
 #define ICBC_PERFECT_ROUND 0        // Enable perfect rounding to compute cluster fit residual.
 
 
-#if ICBC_SIMD >= ICBC_SSE2
-#include <emmintrin.h>
+#if ICBC_X86
+    #if ICBC_SIMD >= ICBC_SSE2
+    #include <emmintrin.h>
+    #endif
+
+    #if ICBC_SIMD >= ICBC_SSE41
+    #include <smmintrin.h>
+    #endif
+
+    #if ICBC_SIMD >= ICBC_AVX1
+    #include <immintrin.h>
+    #endif
+
+    #if ICBC_SIMD >= ICBC_AVX512 && _MSC_VER
+    #include <zmmintrin.h>
+    #endif
 #endif
 
-#if ICBC_SIMD >= ICBC_SSE41
-#include <smmintrin.h>
+#if ICBC_ARM
+    #if ICBC_SIMD == ICBC_NEON
+    #include <arm_neon.h>
+    #endif
 #endif
 
-#if ICBC_SIMD >= ICBC_AVX1
-#include <immintrin.h>
-#endif
-
-#if ICBC_SIMD >= ICBC_AVX512 && _MSC_VER
-#include <zmmintrin.h>
-#endif
-
-#if ICBC_SIMD == ICBC_NEON
-#include <arm_neon.h>
-#endif
-
-#if ICBC_SIMD == ICBC_VMX
-#include <altivec.h>
+#if ICBC_PPC
+    #if ICBC_SIMD == ICBC_VMX
+    #include <altivec.h>
+    #endif
 #endif
 
 #if _MSC_VER
