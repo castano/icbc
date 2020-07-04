@@ -103,10 +103,10 @@ static int simd_version = -1;
 
 
 // https://software.intel.com/content/www/us/en/develop/articles/how-to-detect-new-instruction-support-in-the-4th-generation-intel-core-processor-family.html
-inline void run_cpuid(uint32_t eax, uint32_t ecx, uint32_t* abcd)
+inline void run_cpuid(uint32_t eax, uint32_t ecx, uint32_t abcd[4])
 {
 #if defined(_MSC_VER)
-    __cpuidex(abcd, eax, ecx);
+    __cpuidex((int*)abcd, eax, ecx);
 #else
     uint32_t ebx, edx;
 # if defined( __i386__ ) && defined ( __PIC__ )
@@ -120,72 +120,77 @@ inline void run_cpuid(uint32_t eax, uint32_t ecx, uint32_t* abcd)
 #endif
 }
 
-inline int check_xcr0_ymm()
+inline uint64_t run_xgetbv()
 {
-    uint32_t xcr0;
 #if defined(_MSC_VER)
-    xcr0 = (uint32_t)_xgetbv(0);  /* min VS2010 SP1 compiler is required */
+    return _xgetbv(0);  /* min VS2010 SP1 compiler is required */
 #else
-    __asm__ ("xgetbv" : "=a" (xcr0) : "c" (0) : "%edx" );
+    uint32_t xcr0_lo, xcr0_hi;
+    //__asm__ (".byte   0x0f, 0x01, 0xd0" : "=a" (xcr0_lo), "=d" (xcr0_hi) : "c" (0));
+    __asm__ ("xgetbv" : "=a" (xcr0_lo), "=d" (xcr0_hi) : "c" (0));
+    return xcr0_lo | ((xxh_u64)xcr0_hi << 32);
 #endif
-    return ((xcr0 & 6) == 6); /* checking if xmm and ymm state are enabled in XCR0 */
 }
 
-// check_4th_gen_intel_core_features
-static bool check_avx2() {
-    uint32_t abcd[4];
-    uint32_t fma_movbe_osxsave_mask = ((1 << 12) | (1 << 22) | (1 << 27));
-    uint32_t avx2_bmi12_mask = (1 << 5) | (1 << 3) | (1 << 8);
-
-    /* CPUID.(EAX=01H, ECX=0H):ECX.FMA[bit 12]==1   && 
-       CPUID.(EAX=01H, ECX=0H):ECX.MOVBE[bit 22]==1 && 
-       CPUID.(EAX=01H, ECX=0H):ECX.OSXSAVE[bit 27]==1 */
-    run_cpuid( 1, 0, abcd );
-    if ( (abcd[2] & fma_movbe_osxsave_mask) != fma_movbe_osxsave_mask ) 
-        return false;
-
-    if (!check_xcr0_ymm())
-        return false;
-
-    /*  CPUID.(EAX=07H, ECX=0H):EBX.AVX2[bit 5]==1  &&
-        CPUID.(EAX=07H, ECX=0H):EBX.BMI1[bit 3]==1  &&
-        CPUID.(EAX=07H, ECX=0H):EBX.BMI2[bit 8]==1  */
-    run_cpuid( 7, 0, abcd );
-    if ( (abcd[1] & avx2_bmi12_mask) != avx2_bmi12_mask ) 
-        return false;
-
-    /* CPUID.(EAX=80000001H):ECX.LZCNT[bit 5]==1 */
-    run_cpuid( 0x80000001, 0, abcd );
-    if ( (abcd[2] & (1 << 5)) == 0)
-        return false;
-
-    return true;
-}
 
 inline void detect_simd_version() {
     if (simd_version < 0) {
         simd_version = ICBC_FLOAT;
 
+        uint32_t abcd[4];
+        run_cpuid(1, 0, abcd);
+
         // Check for SSE2
-        //simd_version = ICBC_SSE2;
+        uint32_t SSE2_CPUID_MASK = (1 << 26);
+        if ((abcd[3] & SSE2_CPUID_MASK) == SSE2_CPUID_MASK) {
+            simd_version = ICBC_SSE2;
+        }
 
         // Check for SSE41
-        //simd_version = ICBC_SSE41;
+        uint32_t SSE41_CPUID_MASK = (1 << 19);
+        if ((abcd[2] & SSE41_CPUID_MASK) == SSE41_CPUID_MASK) {
+            simd_version = ICBC_SSE41;
+        }
+
+        uint64_t xgetbv = run_xgetbv();
+
+        // Check that the OS supports YMM registers
+        uint64_t AVX_XGETBV_MASK = (1 << 2) | (1 << 1);
+        if ((xgetbv & AVX_XGETBV_MASK) != AVX_XGETBV_MASK) {
+            return;
+        }
 
         // Check for AVX
-        //simd_version = ICBC_AVX1;
+        uint32_t AVX_CPUID_MASK = (1 << 28);
+        if ((abcd[2] & AVX_CPUID_MASK) == AVX_CPUID_MASK) {
+            simd_version = ICBC_AVX1;
+        }
 
-        // Check for AVX2
-        if (check_avx2())
+        // Check for FMA3 (AVX2 and AVX512 require it)
+        uint32_t FMA3_CPUID_MASK = (1 << 12);
+        if ((abcd[2] & AVX_CPUID_MASK) != AVX_CPUID_MASK) {
+            return;
+        }
+
+        run_cpuid(7, 0, abcd);
+
+        // Check for AVX2 and BMI2
+        uint32_t AVX2_BMI12_CPUID_MASK = (1 << 5) | (1 << 3) | (1 << 8);
+        if ((abcd[1] & AVX2_BMI12_CPUID_MASK) != AVX2_BMI12_CPUID_MASK) {
             simd_version = ICBC_AVX2;
+        }
+
+        // Check that the OS supports ZMM registers
+        uint64_t AVX512F_XGETBV_MASK = (7 << 5) | (1 << 2) | (1 << 1);
+        if ((xgetbv & AVX512F_XGETBV_MASK) != AVX512F_XGETBV_MASK) {
+            return;
+        }
 
         // Check for AVX512F
-        //simd_version = ICBC_AVX512;
-
-        // @@ Use cpuid to determine processor.
-        // @@ Check for bmi2 also.
-        // @@ Make sure AVX is supported by the OS.
-        simd_version = ICBC_AVX512;
+        uint32_t AVX512F_CPUID_MASK = (1 << 16);
+        if ((abcd[1] & AVX512F_CPUID_MASK) != AVX512F_CPUID_MASK) {
+            simd_version = ICBC_AVX512;
+        }
     }
 }
 
@@ -193,6 +198,7 @@ inline void detect_simd_version() {
 void init_dxt1() {
     
     detect_simd_version();
+    printf("SIMD version = %d\n", simd_version);
 
     switch(simd_version) {
     #if ICBC_X86

@@ -8,16 +8,14 @@
 //#define ICBC_SIMD 2         // SSE4.1
 //#define ICBC_SIMD 3         // AVX
 //#define ICBC_SIMD 4         // AVX2
-#define ICBC_SIMD 5         // AVX512
+//#define ICBC_SIMD 5         // AVX512
 //#define ICBC_SIMD -1        // NEON
 //#define ICBC_SIMD -2        // VMX
 //#define ICBC_SIMD -3        // WASM
 
 #define ICBC_IMPLEMENTATION
-#include "icbc_dispatch.h"
 //#include "icbc.h"
-
-
+#include "icbc_dispatch.h"
 
 // stb_image from: https://github.com/nothings/stb/blob/master/stb_image.h
 #define STB_IMAGE_IMPLEMENTATION
