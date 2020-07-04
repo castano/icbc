@@ -29,11 +29,6 @@ namespace icbc {
 
     float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool three_color_mode, bool three_color_black, void * output);
 
-    // @@ Is there any difference between this and compress_dxt1(Quality_Level0) ?
-    float compress_dxt1_fast(const float input_colors[16 * 4], const float input_weights[16], const float color_weights[3], void * output);
-    void compress_dxt1_fast(const unsigned char input_colors[16 * 4], void * output);
-
-
     enum Decoder {
         Decoder_D3D10 = 0,
         Decoder_NVIDIA = 1,
@@ -3597,68 +3592,6 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
 }
 
 
-static float compress_dxt1_fast(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, BlockDXT1 * output)
-{
-    Vector3 colors[16];
-    for (int i = 0; i < 16; i++) {
-        colors[i] = input_colors[i].xyz;
-    }
-    int count = 16;
-
-    /*float error = FLT_MAX;
-    error = compress_dxt1_single_color(colors, input_weights, count, color_weights, output);
-
-    if (error == 0.0f || count == 1) {
-        // Early out.
-        return error;
-    }*/
-
-    // Quick end point selection.
-    Vector3 c0, c1;
-    fit_colors_bbox(colors, count, &c0, &c1);
-    if (c0 == c1) {
-        compress_dxt1_single_color_optimal(vector3_to_color32(c0), output);
-        return evaluate_mse(input_colors, input_weights, color_weights, output);
-    }
-    inset_bbox(&c0, &c1);
-    select_diagonal(colors, count, &c0, &c1);
-    output_block4(input_colors, color_weights, c0, c1, output);
-
-    // Refine color for the selected indices.
-    if (optimize_end_points4(output->indices, input_colors, 16, &c0, &c1)) {
-        output_block4(input_colors, color_weights, c0, c1, output);
-    }
-
-    return evaluate_mse(input_colors, input_weights, color_weights, output);
-}
-
-
-static void compress_dxt1_fast(const uint8 input_colors[16*4], BlockDXT1 * output) {
-
-    Vector3 vec_colors[16];
-    for (int i = 0; i < 16; i++) {
-        vec_colors[i] = { input_colors[4 * i + 0] / 255.0f, input_colors[4 * i + 1] / 255.0f, input_colors[4 * i + 2] / 255.0f };
-    }
-
-    // Quick end point selection.
-    Vector3 c0, c1;
-    //fit_colors_bbox(colors, count, &c0, &c1);
-    //select_diagonal(colors, count, &c0, &c1);
-    fit_colors_bbox(vec_colors, 16, &c0, &c1);
-    if (c0 == c1) {
-        compress_dxt1_single_color_optimal(vector3_to_color32(c0), output);
-        return;
-    }
-    inset_bbox(&c0, &c1);
-    select_diagonal(vec_colors, 16, &c0, &c1);
-    output_block4(vec_colors, c0, c1, output);
-
-    // Refine color for the selected indices.
-    if (optimize_end_points4(output->indices, vec_colors, 16, &c0, &c1)) {
-        output_block4(vec_colors, c0, c1, output);
-    }
-}
-
 // Public API
 
 void init_dxt1() {
@@ -3668,14 +3601,6 @@ void init_dxt1() {
 
 float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool three_color_mode, bool three_color_black, void * output) {
     return compress_dxt1(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, three_color_mode, three_color_black, (BlockDXT1*)output);
-}
-
-float compress_dxt1_fast(const float input_colors[16 * 4], const float input_weights[16], const float rgb[3], void * output) {
-    return compress_dxt1_fast((Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, (BlockDXT1*)output);
-}
-
-void compress_dxt1_fast(const unsigned char input_colors[16 * 4], void * output) {
-    compress_dxt1_fast(input_colors, (BlockDXT1*)output);
 }
 
 void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
