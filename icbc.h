@@ -328,10 +328,9 @@ ICBC_FORCEINLINE int ctz(uint mask) {
 }
 
 
-#if ICBC_SIMD == ICBC_FLOAT  // Purely scalar version.
 #if ICBC_SIMD == ICBC_SCALAR  // Purely scalar version.
 
-#define VEC_SIZE 1
+constexpr int VEC_SIZE = 1;
 
 using VFloat = float;
 using VMask = bool;
@@ -356,9 +355,10 @@ ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d
 
 #elif ICBC_SIMD == ICBC_SSE2 || ICBC_SIMD == ICBC_SSE41
 
-#define VEC_SIZE 4
+constexpr int VEC_SIZE = 4;
 
 #if __GNUC__
+// GCC needs a struct so that we can overload operators.
 union VFloat {
     __m128 v;
     float m128_f32[VEC_SIZE];
@@ -443,11 +443,11 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
     return _mm_min_ps(_mm_max_ps(a, zero), one);
 }
 
+// Assumes a is in [0, 1] range.
 ICBC_FORCEINLINE VFloat vround01(VFloat a) {
 #if ICBC_SIMD == ICBC_SSE41
     return _mm_round_ps(a, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
 #else
-    // @@ Assumes a is positive and small.
     return _mm_cvtepi32_ps(_mm_cvttps_epi32(a + vbroadcast(0.5f)));
 #endif
 }
@@ -525,7 +525,7 @@ ICBC_FORCEINLINE void vtranspose4(VFloat & r0, VFloat & r1, VFloat & r2, VFloat 
 
 #elif ICBC_SIMD == ICBC_AVX1 || ICBC_SIMD == ICBC_AVX2
 
-#define VEC_SIZE 8
+constexpr int VEC_SIZE = 8;
 
 #if __GNUC__
 union VFloat {
@@ -766,7 +766,7 @@ ICBC_FORCEINLINE VFloat vpermute2if(VMask mask, VFloat vlo, VFloat vhi, VInt idx
 
 #elif ICBC_SIMD == ICBC_AVX512
 
-#define VEC_SIZE 16
+constexpr int VEC_SIZE = 16;
 
 #if __GNUC__
 union VFloat {
@@ -945,7 +945,7 @@ ICBC_FORCEINLINE VFloat vpermuteif(VMask mask, VFloat v, VInt idx) {
 
 #elif ICBC_SIMD == ICBC_NEON
 
-#define VEC_SIZE 4
+constexpr int VEC_SIZE = 4;
 
 #if __GNUC__
 union VFloat {
@@ -1032,7 +1032,6 @@ ICBC_FORCEINLINE VFloat vround01(VFloat a) {
 #if __ARM_RACH >= 8
     return vrndqn_f32(a);   // Round to integral (to nearest, ties to even)
 #else
-    // @@ Assumes a is positive and ~small
     return vcvtq_f32_s32(vcvtq_s32_f32(a + vbroadcast(0.5)));
 #endif
 }
@@ -1146,7 +1145,7 @@ ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d
 
 #elif ICBC_SIMD == ICBC_VMX
 
-#define VEC_SIZE 4
+constexpr int VEC_SIZE = 4;
 
 union VFloat {
     vectro float v;
@@ -1280,7 +1279,6 @@ ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d
 
 #endif // ICBC_SIMD == *
 
-#if ICBC_SIMD != ICBC_FLOAT
 #if ICBC_SIMD != ICBC_SCALAR
 ICBC_FORCEINLINE VFloat vmadd(VFloat a, float b, VFloat c) {
     VFloat vb = vbroadcast(b);
@@ -1390,7 +1388,6 @@ ICBC_FORCEINLINE VVector3 vmadd(VVector3 a, VFloat b, VVector3 c) {
     return v8;
 }
 
-#if ICBC_SIMD != ICBC_FLOAT
 #if ICBC_SIMD != ICBC_SCALAR
 ICBC_FORCEINLINE VVector3 vmadd(VVector3 a, float b, VVector3 c) {
     VVector3 v8;
@@ -3613,7 +3610,6 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 // #undef ICBC_SIMD
 // #undef ICBC_ASSERT
 
-// #undef ICBC_FLOAT
 // #undef ICBC_SCALAR
 // #undef ICBC_SSE2
 // #undef ICBC_SSE41
