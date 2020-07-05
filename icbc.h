@@ -128,7 +128,7 @@ namespace icbc {
 #include <stdint.h>
 #include <stdlib.h> // abs
 #include <string.h> // memset
-#include <math.h>   // floorf
+#include <math.h>   // fabsf
 #include <float.h>  // FLT_MAX
 
 #ifndef ICBC_ASSERT
@@ -273,14 +273,6 @@ inline Vector3 min(Vector3 a, Vector3 b) {
 
 inline Vector3 max(Vector3 a, Vector3 b) {
     return { max(a.x, b.x), max(a.y, b.y), max(a.z, b.z) };
-}
-
-inline Vector3 round(Vector3 v) {
-    return { floorf(v.x+0.5f), floorf(v.y + 0.5f), floorf(v.z + 0.5f) };
-}
-
-inline Vector3 floor(Vector3 v) {
-    return { floorf(v.x), floorf(v.y), floorf(v.z) };
 }
 
 inline bool operator==(const Vector3 & a, const Vector3 & b) {
