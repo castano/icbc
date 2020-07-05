@@ -45,7 +45,7 @@ namespace icbc {
 #ifdef ICBC_IMPLEMENTATION
 
 // Instruction level support must be chosen at compile time setting ICBC_SIMD to one of these values:
-#define ICBC_FLOAT  0
+#define ICBC_SCALAR 0
 #define ICBC_SSE2   1
 #define ICBC_SSE41  2
 #define ICBC_AVX1   3
@@ -329,6 +329,7 @@ ICBC_FORCEINLINE int ctz(uint mask) {
 
 
 #if ICBC_SIMD == ICBC_FLOAT  // Purely scalar version.
+#if ICBC_SIMD == ICBC_SCALAR  // Purely scalar version.
 
 #define VEC_SIZE 1
 
@@ -1280,6 +1281,7 @@ ICBC_FORCEINLINE void vtranspose4(VFloat & a, VFloat & b, VFloat & c, VFloat & d
 #endif // ICBC_SIMD == *
 
 #if ICBC_SIMD != ICBC_FLOAT
+#if ICBC_SIMD != ICBC_SCALAR
 ICBC_FORCEINLINE VFloat vmadd(VFloat a, float b, VFloat c) {
     VFloat vb = vbroadcast(b);
     return vmadd(a, vb, c);
@@ -1389,6 +1391,7 @@ ICBC_FORCEINLINE VVector3 vmadd(VVector3 a, VFloat b, VVector3 c) {
 }
 
 #if ICBC_SIMD != ICBC_FLOAT
+#if ICBC_SIMD != ICBC_SCALAR
 ICBC_FORCEINLINE VVector3 vmadd(VVector3 a, float b, VVector3 c) {
     VVector3 v8;
     VFloat vb = vbroadcast(b);
@@ -3611,6 +3614,7 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 // #undef ICBC_ASSERT
 
 // #undef ICBC_FLOAT
+// #undef ICBC_SCALAR
 // #undef ICBC_SSE2
 // #undef ICBC_SSE41
 // #undef ICBC_AVX1
