@@ -9,7 +9,13 @@
 
 namespace icbc {
 
-    void init_dxt1();
+    enum Decoder {
+        Decoder_D3D10 = 0,
+        Decoder_NVIDIA = 1,
+        Decoder_AMD = 2
+    };
+
+    void init_dxt1(Decoder decoder = Decoder_D3D10);
 
     enum Quality {
         Quality_Level1,  // Box fit + least squares fit.
@@ -27,17 +33,10 @@ namespace icbc {
         Quality_Max = Quality_Level9,
     };
 
-    float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool three_color_mode, bool three_color_black, void * output);
-
-    enum Decoder {
-        Decoder_D3D10 = 0,
-        Decoder_NVIDIA = 1,
-        Decoder_AMD = 2
-    };
-
     void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
     float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * block, Decoder decoder = Decoder_D3D10);
 
+    float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool three_color_mode, bool three_color_black, void * output);
 }
 
 #endif // ICBC_H
@@ -122,10 +121,6 @@ namespace icbc {
 #define ICBC_USE_NEON_VTL 0         // Not tested.
 #endif
 
-
-#ifndef ICBC_DECODER
-#define ICBC_DECODER 0       // 0 = d3d10, 1 = nvidia, 2 = amd
-#endif
 
 // Some experimental knobs:
 #define ICBC_PERFECT_ROUND 0        // Enable perfect rounding to compute cluster fit residual.
@@ -2538,6 +2533,8 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // Palette evaluation.
 
+Decoder s_decoder = Decoder_D3D10;
+
 // D3D10
 inline void evaluate_palette4_d3d10(Color16 c0, Color16 c1, Color32 palette[4]) {
     palette[2].r = (2 * palette[0].r + palette[1].r) / 3;
@@ -2603,20 +2600,20 @@ static void evaluate_palette_nv(Color16 c0, Color16 c1, Color32 palette[4]) {
 
 // AMD
 inline void evaluate_palette4_amd(Color16 c0, Color16 c1, Color32 palette[4]) {
-    palette[2].r = (43 * palette[0].r + 21 * palette[1].r + 32) / 8;
-    palette[2].g = (43 * palette[0].g + 21 * palette[1].g + 32) / 8;
-    palette[2].b = (43 * palette[0].b + 21 * palette[1].b + 32) / 8;
+    palette[2].r = (43 * palette[0].r + 21 * palette[1].r + 32) >> 6;
+    palette[2].g = (43 * palette[0].g + 21 * palette[1].g + 32) >> 6;
+    palette[2].b = (43 * palette[0].b + 21 * palette[1].b + 32) >> 6;
     palette[2].a = 0xFF;
 
-    palette[3].r = (43 * palette[1].r + 21 * palette[0].r + 32) / 8;
-    palette[3].g = (43 * palette[1].g + 21 * palette[0].g + 32) / 8;
-    palette[3].b = (43 * palette[1].b + 21 * palette[0].b + 32) / 8;
+    palette[3].r = (43 * palette[1].r + 21 * palette[0].r + 32) >> 6;
+    palette[3].g = (43 * palette[1].g + 21 * palette[0].g + 32) >> 6;
+    palette[3].b = (43 * palette[1].b + 21 * palette[0].b + 32) >> 6;
     palette[3].a = 0xFF;
 }
 inline void evaluate_palette3_amd(Color16 c0, Color16 c1, Color32 palette[4]) {
-    palette[2].r = (c0.r + c1.r + 1) / 2;
-    palette[2].g = (c0.g + c1.g + 1) / 2;
-    palette[2].b = (c0.b + c1.b + 1) / 2;
+    palette[2].r = (palette[0].r + palette[1].r + 1) / 2;
+    palette[2].g = (palette[0].g + palette[1].g + 1) / 2;
+    palette[2].b = (palette[0].b + palette[1].b + 1) / 2;
     palette[2].a = 0xFF;
     palette[3].u = 0;
 }
@@ -2632,33 +2629,20 @@ static void evaluate_palette_amd(Color16 c0, Color16 c1, Color32 palette[4]) {
     }
 }
 
-// Use ICBC_DECODER to determine decoder used.
 inline void evaluate_palette4(Color16 c0, Color16 c1, Color32 palette[4]) {
-#if ICBC_DECODER == Decoder_D3D10
-    evaluate_palette4_d3d10(c0, c1, palette);
-#elif ICBC_DECODER == Decoder_NVIDIA
-    evaluate_palette4_nv(c0, c1, palette);
-#elif ICBC_DECODER == Decoder_AMD
-    evaluate_palette4_amd(c0, c1, palette);
-#endif
+    if (s_decoder == Decoder_D3D10)         evaluate_palette4_d3d10(c0, c1, palette);    
+    else if (s_decoder == Decoder_NVIDIA)   evaluate_palette4_nv(c0, c1, palette);
+    else if (s_decoder == Decoder_AMD)      evaluate_palette4_amd(c0, c1, palette);
 }
 inline void evaluate_palette3(Color16 c0, Color16 c1, Color32 palette[4]) {
-#if ICBC_DECODER == Decoder_D3D10
-    evaluate_palette3_d3d10(c0, c1, palette);
-#elif ICBC_DECODER == Decoder_NVIDIA
-    evaluate_palette3_nv(c0, c1, palette);
-#elif ICBC_DECODER == Decoder_AMD
-    evaluate_palette3_amd(c0, c1, palette);
-#endif
+    if (s_decoder == Decoder_D3D10)         evaluate_palette3_d3d10(c0, c1, palette);
+    else if (s_decoder == Decoder_NVIDIA)   evaluate_palette3_nv(c0, c1, palette);
+    else if (s_decoder == Decoder_AMD)      evaluate_palette3_amd(c0, c1, palette);
 }
 inline void evaluate_palette(Color16 c0, Color16 c1, Color32 palette[4]) {
-#if ICBC_DECODER == Decoder_D3D10
-    evaluate_palette_d3d10(c0, c1, palette);
-#elif ICBC_DECODER == Decoder_NVIDIA
-    evaluate_palette_nv(c0, c1, palette);
-#elif ICBC_DECODER == Decoder_AMD
-    evaluate_palette_amd(c0, c1, palette);
-#endif
+    if (s_decoder == Decoder_D3D10)         evaluate_palette_d3d10(c0, c1, palette);
+    else if (s_decoder == Decoder_NVIDIA)   evaluate_palette_nv(c0, c1, palette);
+    else if (s_decoder == Decoder_AMD)      evaluate_palette_amd(c0, c1, palette);
 }
 
 static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
@@ -3276,44 +3260,110 @@ static inline int Lerp13(int a, int b)
     return (a * 2 + b) / 3;
 }
 
-static void PrepareOptTable(uint8 * table, const uint8 * expand, int size)
+static void PrepareOptTable5(uint8 * table, Decoder decoder)
 {
+    uint8 expand[32];
+    for (int i = 0; i < 32; i++) expand[i] = (i << 3) | (i >> 2);
+
     for (int i = 0; i < 256; i++) {
         int bestErr = 256 * 100;
 
-        for (int min = 0; min < size; min++) {
-            for (int max = 0; max < size; max++) {
-                int mine = expand[min];
-                int maxe = expand[max];
+        for (int mn = 0; mn < 32; mn++) {
+            for (int mx = 0; mx < 32; mx++) {
+                int mine = expand[mn];
+                int maxe = expand[mx];
 
-                int err = abs(Lerp13(maxe, mine) - i) * 100;
+                int err;
 
+                int amd_r = (43 * maxe + 21 * mine + 32) >> 6;
+                int amd_err = abs(amd_r - i);
+
+                int nv_r = ((2 * mx + mn) * 22) / 8;
+                int nv_err = abs(nv_r - i);
+
+                if (decoder == Decoder_D3D10) {
                 // DX10 spec says that interpolation must be within 3% of "correct" result,
                 // add this as error term. (normally we'd expect a random distribution of
                 // +-1.5% error, but nowhere in the spec does it say that the error has to be
                 // unbiased - better safe than sorry).
-                err += abs(max - min) * 3;
+                    int r = (maxe * 2 + mine) / 3;
+                    err = abs(r - i) * 100 + abs(mx - mn) * 3;
+
+                    // Another approach is to consider the worst of AMD and NVIDIA errors.
+                    err = max(amd_err, nv_err);                    
+                }
+                else if (decoder == Decoder_AMD) {
+                    err = amd_err;
+                }
+                else if (decoder == Decoder_NVIDIA) {
+                    err = nv_err;
+                }
 
                 if (err < bestErr) {
                     bestErr = err;
-                    table[i * 2 + 0] = max;
-                    table[i * 2 + 1] = min;
+                    table[i * 2 + 0] = mx;
+                    table[i * 2 + 1] = mn;
                 }
             }
         }
     }
 }
 
-static void init_single_color_tables()
+static void PrepareOptTable6(uint8 * table, Decoder decoder)
+{
+    uint8 expand[64];
+    for (int i = 0; i < 64; i++) expand[i] = (i << 2) | (i >> 4);
+
+    for (int i = 0; i < 256; i++) {
+        int bestErr = 256 * 100;
+
+        for (int mn = 0; mn < 64; mn++) {
+            for (int mx = 0; mx < 64; mx++) {
+                int mine = expand[mn];
+                int maxe = expand[mx];
+
+                int err;
+
+                int amd_g = (43 * maxe + 21 * mine + 32) >> 6;
+                int amd_err = abs(amd_g - i);
+
+                int nv_g = (256 * mine + (maxe - mine) / 4 + 128 + (maxe - mine) * 80) / 256;
+                int nv_err = abs(nv_g - i);
+
+                if (decoder == Decoder_D3D10) {
+                    // DX10 spec says that interpolation must be within 3% of "correct" result,
+                    // add this as error term. (normally we'd expect a random distribution of
+                    // +-1.5% error, but nowhere in the spec does it say that the error has to be
+                    // unbiased - better safe than sorry).
+                    int g = (maxe * 2 + mine) / 3;
+                    err = abs(g - i) * 100 + abs(mx - mn) * 3;
+
+                    // Another approach is to consider the worst of AMD and NVIDIA errors.
+                    err = max(amd_err, nv_err);
+                }
+                else if (decoder == Decoder_AMD) {
+                    err = amd_err;
+                }
+                else if (decoder == Decoder_NVIDIA) {
+                    err = nv_err;
+                }
+
+                if (err < bestErr) {
+                    bestErr = err;
+                    table[i * 2 + 0] = mx;
+                    table[i * 2 + 1] = mn;
+                }
+            }
+        }
+    }
+}
+
+
+static void init_single_color_tables(Decoder decoder)
 {
     // Prepare single color lookup tables.
-    uint8 expand5[32];
-    uint8 expand6[64];
-    for (int i = 0; i < 32; i++) expand5[i] = (i << 3) | (i >> 2);
-    for (int i = 0; i < 64; i++) expand6[i] = (i << 2) | (i >> 4);
-
-    PrepareOptTable(&s_match5[0][0], expand5, 32);
-    PrepareOptTable(&s_match6[0][0], expand6, 64);
+    PrepareOptTable5(&s_match5[0][0], decoder);
+    PrepareOptTable6(&s_match6[0][0], decoder);
 }
 
 // Single color compressor, based on:
@@ -3615,13 +3665,10 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
 
 // Public API
 
-void init_dxt1() {
-    init_single_color_tables();
+void init_dxt1(Decoder decoder) {
+    s_decoder = decoder;
+    init_single_color_tables(decoder);
     init_cluster_tables();
-}
-
-float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool three_color_mode, bool three_color_black, void * output) {
-    return compress_dxt1(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, three_color_mode, three_color_black, (BlockDXT1*)output);
 }
 
 void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
@@ -3632,10 +3679,13 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
     return evaluate_dxt1_error(rgba_block, (const BlockDXT1 *)dxt_block, decoder);
 }
 
+float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool three_color_mode, bool three_color_black, void * output) {
+    return compress_dxt1(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, three_color_mode, three_color_black, (BlockDXT1*)output);
+}
+
 } // icbc
 
 // // Do not polute preprocessor definitions.
-// #undef ICBC_DECODER
 // #undef ICBC_SIMD
 // #undef ICBC_ASSERT
 
