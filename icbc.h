@@ -3344,12 +3344,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
     int sat_count = compute_sat(colors, weights, count, &sat);
 
     Vector3 start, end;
-#if ICBC_FAST_CLUSTER_FIT
-    if (sat_count == 16) fast_cluster_fit_four(sat, metric_sqr, &start, &end);
-    else cluster_fit_four(sat, sat_count, metric_sqr, &start, &end);
-#else
     cluster_fit_four(sat, sat_count, metric_sqr, &start, &end);
-#endif
 
     output_block4(input_colors, color_weights, start, end, output);
 
@@ -3658,9 +3653,7 @@ float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * d
 // #undef ICBC_USE_AVX512_PERMUTE
 // #undef ICBC_USE_NEON_VTL
 
-// #undef ICBC_FAST_CLUSTER_FIT
 // #undef ICBC_PERFECT_ROUND
-// #undef ICBC_USE_SAT
 
 #endif // ICBC_IMPLEMENTATION
 
