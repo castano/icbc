@@ -3282,10 +3282,10 @@ static void PrepareOptTable5(uint8 * table, Decoder decoder)
                 int nv_err = abs(nv_r - i);
 
                 if (decoder == Decoder_D3D10) {
-                // DX10 spec says that interpolation must be within 3% of "correct" result,
-                // add this as error term. (normally we'd expect a random distribution of
-                // +-1.5% error, but nowhere in the spec does it say that the error has to be
-                // unbiased - better safe than sorry).
+                    // DX10 spec says that interpolation must be within 3% of "correct" result,
+                    // add this as error term. (normally we'd expect a random distribution of
+                    // +-1.5% error, but nowhere in the spec does it say that the error has to be
+                    // unbiased - better safe than sorry).
                     int r = (maxe * 2 + mine) / 3;
                     err = abs(r - i) * 100 + abs(mx - mn) * 3;
 

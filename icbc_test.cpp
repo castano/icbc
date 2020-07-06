@@ -2,16 +2,15 @@
 // $ g++ icbc_test.cpp -O3 -mavx2 -lpthread -std=c+=11
 // > cl icbc_test.cpp /O2 /arch:AVX2
 
-// Enable one of these:
+// Enable one of these to override the default selection:
 //#define ICBC_SIMD 0         // FLOAT
 //#define ICBC_SIMD 1         // SSE2
 //#define ICBC_SIMD 2         // SSE4.1
 //#define ICBC_SIMD 3         // AVX
-#define ICBC_SIMD 4         // AVX2
+//#define ICBC_SIMD 4         // AVX2
 //#define ICBC_SIMD 5         // AVX512
-//#define ICBC_SIMD -1        // NEON
-//#define ICBC_SIMD -2        // VMX
-//#define ICBC_SIMD -3        // WASM
+//#define ICBC_SIMD 6         // NEON
+//#define ICBC_SIMD 7         // VMX
 
 #define ICBC_IMPLEMENTATION
 #include "icbc.h"
@@ -22,8 +21,6 @@
 
 #define IC_PFOR_IMPLEMENTATION
 #include "ic_pfor.h"
-
-
 
 #include <stdio.h>
 #include <stdint.h>
@@ -302,6 +299,7 @@ bool output_dds = false;
 bool output_ktx = false;
 bool output_png = false;
 int repeat_count = 1;
+icbc::Decoder decoder = icbc::Decoder_D3D10;
 icbc::Quality quality_level = icbc::Quality_Default;
 
 // Output stats:
@@ -459,12 +457,23 @@ int main(int argc, char * argv[]) {
                 if (quality_level > icbc::Quality_Max) quality_level = icbc::Quality_Max;
             }
         }
+        else if (strcmp(argv[i], "-dec") == 0) {
+            if (i+1 < argc) {
+                if (strcmp(argv[i+1], "nv") == 0) decoder = icbc::Decoder_NVIDIA;
+                else if (strcmp(argv[i+1], "amd") == 0) decoder = icbc::Decoder_AMD;
+                else if (strcmp(argv[i+1], "d3d10") == 0) decoder = icbc::Decoder_D3D10;
+                else {
+                    printf("Unrecognized decoder argument: %s\n", argv[i+1]);
+                }
+                i += 1;
+            }
+        }
         else if (atoi(argv[i])) {
             repeat_count = atoi(argv[i]);
         }
     }
 
-    icbc::init_dxt1();
+    icbc::init_dxt1(decoder);
     int thread_count = ic::init_pfor();
     printf("Using %d threads.\n", thread_count);
 
