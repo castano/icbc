@@ -1,0 +1,5 @@
+tracy
+*.pdb
+*.obj
+*.exe
+
