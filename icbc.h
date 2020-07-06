@@ -54,13 +54,47 @@ namespace icbc {
 #define ICBC_NEON   -1
 #define ICBC_VMX    -2
 
-// SIMD version. (FLOAT=0, SSE2=1, SSE41=2, AVX1=3, AVX2=4, AVX512=5, NEON=-1, VMX=-2)
-#ifndef ICBC_SIMD
-#if _M_ARM
-#define ICBC_SIMD -1
-#else
-#define ICBC_SIMD 5
+#if defined(__i386__) || defined(_M_IX86) || defined(__x86_64__) || defined(_M_X64)
+    #define ICBC_X86 1
 #endif
+
+#if (defined(__arm__) || defined(_M_ARM))
+    #define ICBC_ARM 1
+#endif
+
+#if (defined(__PPC__) || defined(_M_PPC))
+    #define ICBC_PPC 1
+#endif
+
+// SIMD version.
+#ifndef ICBC_SIMD
+    #if ICBC_X86
+        #if __AVX512F__
+            #define ICBC_SIMD ICBC_AVX512
+        #elif __AVX2__
+            #define ICBC_SIMD ICBC_AVX2
+        #elif __AVX__
+            #define ICBC_SIMD ICBC_AVX1
+        #elif __SSE4_1__
+            #define ICBC_SIMD ICBC_SSE41
+        #elif __SSE2__
+            #define ICBC_SIMD ICBC_SSE2
+        #else
+            #define ICBC_SIMD ICBC_SCALAR
+        #endif
+    #endif
+
+    #if ICBC_ARM
+        #if __ARM_NEON__
+            #define ICBC_SIMD ICBC_NEON
+        #else
+            #define ICBC_SIMD ICBC_SCALAR
+        #endif
+    #endif
+
+    #if ICBC_PPC
+        #define ICBC_SIMD ICBC_VMX
+    #endif
 #endif
 
 // AVX1 does not require FMA, and depending on whether it's Intel or AMD you may have FMA3 or FMA4. What a mess.
