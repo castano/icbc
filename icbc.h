@@ -2053,7 +2053,6 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         x1.z = vpermuteif(c1 >= 0, vbsat, c1);
         w1   = vpermuteif(c1 >= 0, vwsat, c1);
 
-
 #elif ICBC_USE_AVX2_PERMUTE2
 
         // Load 4 uint8 per lane. @@ Ideally I should pack this better and load only 2.
@@ -2762,6 +2761,17 @@ static float evaluate_mse(const Vector4 input_colors[16], const float input_weig
     return error;
 }
 
+static float evaluate_mse(const Vector4 input_colors[16], const float input_weights[16], const Vector3& color_weights, Vector3 palette[4], uint32 indices) {
+
+    // evaluate error for each index.
+    float error = 0.0f;
+    for (int i = 0; i < 16; i++) {
+        int index = (indices >> (2 * i)) & 3;
+        error += input_weights[i] * evaluate_mse(palette[index], input_colors[i].xyz, color_weights);
+    }
+    return error;
+}
+
 float evaluate_dxt1_error(const uint8 rgba_block[16*4], const BlockDXT1 * block, Decoder decoder) {
     Color32 palette[4];
     if (decoder == Decoder_NVIDIA) {
@@ -3027,7 +3037,7 @@ static uint compute_indices(const Vector4 input_colors[16], const Vector3 & colo
 }
 
 
-static void output_block3(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 & v0, const Vector3 & v1, BlockDXT1 * block)
+static float output_block3(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool allow_transparent_black, const Vector3 & v0, const Vector3 & v1, BlockDXT1 * block)
 {
     Color16 color0 = vector3_to_color16(v0);
     Color16 color1 = vector3_to_color16(v1);
@@ -3041,10 +3051,12 @@ static void output_block3(const Vector4 input_colors[16], const Vector3 & color_
 
     block->col0 = color0;
     block->col1 = color1;
-    block->indices = compute_indices(input_colors, color_weights, palette);
+    block->indices = compute_indices3(input_colors, color_weights, allow_transparent_black, palette);
+
+    return evaluate_mse(input_colors, input_weights, color_weights, palette, block->indices);
 }
 
-static void output_block4(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 & v0, const Vector3 & v1, BlockDXT1 * block)
+static float output_block4(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, const Vector3 & v0, const Vector3 & v1, BlockDXT1 * block)
 {
     Color16 color0 = vector3_to_color16(v0);
     Color16 color1 = vector3_to_color16(v1);
@@ -3059,25 +3071,10 @@ static void output_block4(const Vector4 input_colors[16], const Vector3 & color_
     block->col0 = color0;
     block->col1 = color1;
     block->indices = compute_indices4(input_colors, color_weights, palette);
+
+    return evaluate_mse(input_colors, input_weights, color_weights, palette, block->indices);
 }
 
-
-static void output_block4(const Vector3 input_colors[16], const Vector3 & v0, const Vector3 & v1, BlockDXT1 * block)
-{
-    Color16 color0 = vector3_to_color16(v0);
-    Color16 color1 = vector3_to_color16(v1);
-
-    if (color0.u < color1.u) {
-        swap(color0, color1);
-    }
-
-    Vector3 palette[4];
-    evaluate_palette(color0, color1, palette);
-
-    block->col0 = color0;
-    block->col1 = color1;
-    block->indices = compute_indices4(input_colors, palette);
-}
 
 // Least squares fitting of color end points for the given indices. @@ Take weights into account.
 static bool optimize_end_points4(uint indices, const Vector4 * colors, /*const float * weights,*/ int count, Vector3 * a, Vector3 * b)
@@ -3398,9 +3395,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
     Vector3 start, end;
     cluster_fit_four(sat, sat_count, metric_sqr, &start, &end);
 
-    output_block4(input_colors, color_weights, start, end, output);
-
-    float best_error = evaluate_mse(input_colors, input_weights, color_weights, output);
+    float best_error = output_block4(input_colors, input_weights, color_weights, start, end, output);
 
     if (three_color_mode) {
         if (use_transparent_black) {
@@ -3415,9 +3410,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
         cluster_fit_three(sat, sat_count, metric_sqr, &start, &end);
 
         BlockDXT1 three_color_block;
-        output_block3(input_colors, color_weights, start, end, &three_color_block);
-
-        float three_color_error = evaluate_mse(input_colors, input_weights, color_weights, &three_color_block);
+        float three_color_error = output_block3(input_colors, input_weights, color_weights, allow_transparent_black, start, end, &three_color_block);
 
         if (three_color_error < best_error) {
             best_error = three_color_error;
@@ -3625,16 +3618,13 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
         fit_colors_bbox(colors, count, &c0, &c1);
         inset_bbox(&c0, &c1);
         select_diagonal(colors, count, &c0, &c1);
-        output_block4(input_colors, color_weights, c0, c1, output);
-
-        error = evaluate_mse(input_colors, input_weights, color_weights, output);
+        error = output_block4(input_colors, input_weights, color_weights, c0, c1, output);
 
         // Refine color for the selected indices.
         if (opt.least_squares_fit && optimize_end_points4(output->indices, input_colors, 16, &c0, &c1)) {
             BlockDXT1 optimized_block;
-            output_block4(input_colors, color_weights, c0, c1, &optimized_block);
+            float optimized_error = output_block4(input_colors, input_weights, color_weights, c0, c1, &optimized_block);
 
-            float optimized_error = evaluate_mse(input_colors, input_weights, color_weights, &optimized_block);
             if (optimized_error < error) {
                 error = optimized_error;
                 *output = optimized_block;
