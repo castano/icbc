@@ -2857,32 +2857,7 @@ static uint compute_indices4(const Vector4 input_colors[16], const Vector3 & col
     return interleave(indices1, indices0);
 }
 
-static uint compute_indices3(const Vector4 input_colors[16], const Vector3 & color_weights, const Vector3 palette[4]) {
-#if 0
-    Vector3 p0 = palette[0] * color_weights;
-    Vector3 p1 = palette[1] * color_weights;
-    Vector3 p2 = palette[2] * color_weights;
-    Vector3 p3 = palette[3] * color_weights;
-
-    uint indices = 0;
-    for (int i = 0; i < 16; i++) {
-        Vector3 ci = input_colors[i].xyz * color_weights;
-        float d0 = lengthSquared(p0 - ci);
-        float d1 = lengthSquared(p1 - ci);
-        float d2 = lengthSquared(p2 - ci);
-        float d3 = lengthSquared(p3 - ci);
-
-        uint index;
-        if (d0 < d1 && d0 < d2 && d0 < d3) index = 0;
-        else if (d1 < d2 && d1 < d3) index = 1;
-        else if (d2 < d3) index = 2;
-        else index = 3;
-
-        indices |= index << (2 * i);
-    }
-
-    return indices;
-#else
+static uint compute_indices3(const Vector4 input_colors[16], const Vector3 & color_weights, bool allow_transparent_black, const Vector3 palette[4]) {
     uint indices0 = 0;
     uint indices1 = 0;
 
@@ -2891,90 +2866,40 @@ static uint compute_indices3(const Vector4 input_colors[16], const Vector3 & col
     VVector3 vp1 = vbroadcast(palette[1]) * vw;
     VVector3 vp2 = vbroadcast(palette[2]) * vw;
 
-    for (int i = 0; i < 16; i += VEC_SIZE) {
-        VVector3 vc = vload(&input_colors[i]) * vw;
+    if (allow_transparent_black) {
+        for (int i = 0; i < 16; i += VEC_SIZE) {
+            VVector3 vc = vload(&input_colors[i]) * vw;
 
-        VFloat d0 = vlen2(vc - vp0);
-        VFloat d1 = vlen2(vc - vp1);
-        VFloat d2 = vlen2(vc - vp2);
-        VFloat d3 = vdot(vc, vc);
+            VFloat d0 = vlen2(vp0 - vc);
+            VFloat d1 = vlen2(vp1 - vc);
+            VFloat d2 = vlen2(vp2 - vc);
+            VFloat d3 = vdot(vc, vc);
 
-        // @@ simplify i1 & i2
-        //VMask i0 = (d0 < d1) & (d0 < d2) & (d0 < d3); // 0
-        VMask i1 = (d1 <= d0) & (d1 < d2) & (d1 < d3); // 1
-        VMask i2 = (d2 <= d0) & (d2 <= d1) & (d2 < d3); // 2
-        VMask i3 = (d3 <= d0) & (d3 <= d1) & (d3 <= d2); // 3
-        //VFloat vindex = vselect(i0, vselect(i1, vselect(i2, vbroadcast(3), vbroadcast(2)), vbroadcast(1)), vbroadcast(0));
+            VMask i1 = (d1 < d2);
+            VMask i2 = (d2 <= d0) & (d2 <= d1);
+            VMask i3 = (d3 <= d0) & (d3 <= d1) & (d3 <= d2);
 
-        indices0 |= mask(i2 | i3) << i;
-        indices1 |= mask(i1 | i3) << i;
+            indices0 |= mask(i2 | i3) << i;
+            indices1 |= mask(i1 | i3) << i;
+        }
     }
+    else {
+        for (int i = 0; i < 16; i += VEC_SIZE) {
+            VVector3 vc = vload(&input_colors[i]) * vw;
 
-    uint indices = interleave(indices1, indices0);
-    return indices;
-#endif
-}
+            VFloat d0 = vlen2(vc - vp0);
+            VFloat d1 = vlen2(vc - vp1);
+            VFloat d2 = vlen2(vc - vp2);
 
+            VMask i1 = (d1 < d2);
+            VMask i2 = (d2 <= d0) & (d2 <= d1);
 
-
-static uint compute_indices4(const Vector3 input_colors[16], const Vector3 palette[4]) {
-#if 0
-    uint indices0 = 0;
-    uint indices1 = 0;
-
-    VVector3 vp0 = vbroadcast(palette[0]);
-    VVector3 vp1 = vbroadcast(palette[1]);
-    VVector3 vp2 = vbroadcast(palette[2]);
-    VVector3 vp3 = vbroadcast(palette[3]);
-
-    for (int i = 0; i < 16; i += VEC_SIZE) {
-        VVector3 vc = vload(&input_colors[i]);
-
-        VFloat d0 = vlen2(vc - vp0);
-        VFloat d1 = vlen2(vc - vp1);
-        VFloat d2 = vlen2(vc - vp2);
-        VFloat d3 = vlen2(vc - vp3);
-
-        VMask b1 = d1 > d2;
-        VMask b2 = d0 > d2;
-        VMask x0 = b1 & b2;
-
-        VMask b0 = d0 > d3;
-        VMask b3 = d1 > d3;
-        x0 = x0 | (b0 & b3);
-
-        VMask b4 = d2 > d3;
-        VMask x1 = b0 & b4;
-
-        indices0 |= mask(x0) << i;
-        indices1 |= mask(x1) << i;
+            indices0 |= mask(i2) << i;
+            indices1 |= mask(i1) << i;
+        }
     }
 
     return interleave(indices1, indices0);
-#else
-    uint indices = 0;
-    for (int i = 0; i < 16; i++) {
-        Vector3 ci = input_colors[i];
-        float d0 = lengthSquared(palette[0] - ci);
-        float d1 = lengthSquared(palette[1] - ci);
-        float d2 = lengthSquared(palette[2] - ci);
-        float d3 = lengthSquared(palette[3] - ci);
-
-        uint b0 = d0 > d3;
-        uint b1 = d1 > d2;
-        uint b2 = d0 > d2;
-        uint b3 = d1 > d3;
-        uint b4 = d2 > d3;
-
-        uint x0 = b1 & b2;
-        uint x1 = b0 & b3;
-        uint x2 = b0 & b4;
-
-        indices |= (x2 | ((x0 | x1) << 1)) << (2 * i);
-    }
-
-    return indices;
-#endif
 }
 
 
@@ -3385,7 +3310,7 @@ static void compress_dxt1_single_color_optimal(Color32 c, BlockDXT1 * output)
 }
 
 
-static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, bool use_transparent_black, BlockDXT1 * output)
+static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, bool try_transparent_black, bool allow_transparent_black, BlockDXT1 * output)
 {
     Vector3 metric_sqr = color_weights * color_weights;
 
@@ -3398,7 +3323,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
     float best_error = output_block4(input_colors, input_weights, color_weights, start, end, output);
 
     if (three_color_mode) {
-        if (use_transparent_black) {
+        if (try_transparent_black) {
             Vector3 tmp_colors[16];
             float tmp_weights[16];
             int tmp_count = skip_blacks(colors, weights, count, tmp_colors, tmp_weights);
@@ -3640,7 +3565,7 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
 
         // Try cluster fit.
         BlockDXT1 cluster_fit_output;
-        float cluster_fit_error = compress_dxt1_cluster_fit(input_colors, input_weights, colors, weights, count, color_weights, use_three_color_mode, use_three_color_black, &cluster_fit_output);
+        float cluster_fit_error = compress_dxt1_cluster_fit(input_colors, input_weights, colors, weights, count, color_weights, use_three_color_mode, use_three_color_black, three_color_black, &cluster_fit_output);
         if (cluster_fit_error < error) {
             *output = cluster_fit_output;
             error = cluster_fit_error;
