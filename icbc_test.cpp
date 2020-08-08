@@ -17,7 +17,11 @@
 
 // stb_image from: https://github.com/nothings/stb/blob/master/stb_image.h
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
+#include "extern/stb_image.h"
+
+// stb_image_write from: https://github.com/nothings/stb/blob/master/stb_image_write.h
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "extern/stb_image_write.h"
 
 #define IC_PFOR_IMPLEMENTATION
 #include "ic_pfor.h"
@@ -254,7 +258,28 @@ static bool output_dxt_ktx(u32 w, u32 h, const u8* data, const char * filename) 
     return true;
 }
 
-static bool output_dxt_png(u32 w, u32 h, const u8* data, const char * filename) {
+static bool output_dxt_png(u32 w, u32 h, const u8* data, const char * filename, icbc::Decoder decoder) {
+
+    u8 * rgb_data = (u8 *)malloc(w * h * 4 * 4 * 3);
+
+    for (int y = 0; y < h; y += 4) {
+        for (int x = 0; x < w; x += 4) {
+            unsigned char rgba_block[16 * 4];
+            icbc::decode_dxt1(data, rgba_block, decoder);
+            data += 8;
+
+            for (int yy = 0; yy < 4; yy++) {
+                for (int xx = 0; xx < 4; xx++) {
+                    rgb_data[(y + yy) * w * 3 + (x + xx) * 3 + 0] = rgba_block[yy * 16 + xx * 4 + 0];
+                    rgb_data[(y + yy) * w * 3 + (x + xx) * 3 + 1] = rgba_block[yy * 16 + xx * 4 + 1];
+                    rgb_data[(y + yy) * w * 3 + (x + xx) * 3 + 2] = rgba_block[yy * 16 + xx * 4 + 2];
+                }
+            }
+        }
+    }
+
+    return stbi_write_png(filename, w, h, 3, rgb_data, /*stride_in_bytes=*/w*3) != 0;
+}
 
     FILE * fp = fopen(filename, "wb");
     if (fp == nullptr) return false;
@@ -394,7 +419,7 @@ bool encode_image(const char * input_filename) {
     }
     if (output_png) {
         snprintf(output_filename, 1024, "%.*s_bc1.png", int(strchr(input_filename, '.')-input_filename), input_filename);
-        output_dxt_png(bw, bh, block_data, output_filename);
+        output_dxt_png(bw, bh, block_data, output_filename, decoder);
     }
 
     total_block_count += block_count;

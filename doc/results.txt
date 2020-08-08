@@ -29,7 +29,7 @@ Cofee Lake - clang 11.0.0 - 2020/05/30
     SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.444171 (0.419927)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 0.959968 (0.941949)
 
-Sky Lake - vc2009/x64 - 2020/05/30
+Sky Lake - vc2019/x64 - 2020/05/30
     AVX512: RMSE = 6.916    PSNR = 31.333   TIME = 0.170101 (0.165569)
     AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.272625 (0.267651)
     AVX1:   RMSE = 6.916    PSNR = 31.333   TIME = 0.537877 (0.530867)
@@ -54,3 +54,5 @@ Raspberry Pi - Neon - gcc 8.3 - 2020/06/11
 Rasperry Pi - Float - gcc 8.3 - 2020/06/11
     RMSE = 6.916	PSNR = 31.333	TIME = 9.983787 (9.971635)
 
+Sky Lake - vc2019/x64 - 2020/05/30
+    AVX512: RMSE = 6.916    PSNR = 31.333   TIME = 0.162747 (0.155880)

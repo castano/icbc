@@ -1572,7 +1572,7 @@ static Color16 vector3_to_color16(const Vector3 & v) {
     b += (v.z > midpoints5[b]);
 
     Color16 c;
-    c.u = (r << 11) | (g << 5) | b;
+    c.u = uint16((r << 11) | (g << 5) | b);
     return c;
 }
 
@@ -1822,7 +1822,7 @@ int compute_sat(const Vector3 * colors, const float * weights, int count, Summed
     sat->w[0] = w;
 
     for (int i = 1; i < count; i++) {
-        float w = weights[order[i]];
+        w = weights[order[i]];
         sat->r[i] = sat->r[i - 1] + colors[order[i]].x * w;
         sat->g[i] = sat->g[i - 1] + colors[order[i]].y * w;
         sat->b[i] = sat->b[i - 1] + colors[order[i]].z * w;
@@ -1906,9 +1906,9 @@ static void init_cluster_tables() {
                     }
 
                     if (!found) {
-                        s_fourCluster[i].c0 = c0;
-                        s_fourCluster[i].c1 = c0+c1;
-                        s_fourCluster[i].c2 = c0+c1+c2;
+                        s_fourCluster[i].c0 = uint8(c0);
+                        s_fourCluster[i].c1 = uint8(c0+c1);
+                        s_fourCluster[i].c2 = uint8(c0+c1+c2);
                         i++;
                     }
                 }
@@ -1941,8 +1941,8 @@ static void init_cluster_tables() {
                 }
 
                 if (!found) {
-                    s_threeCluster[i].c0 = c0;
-                    s_threeCluster[i].c1 = c0 + c1;
+                    s_threeCluster[i].c0 = uint8(c0);
+                    s_threeCluster[i].c1 = uint8(c0 + c1);
                     i++;
                 }
             }
@@ -2156,6 +2156,7 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         }
 
 #else
+
         // Scalar path
         x0.x = vzero(); x0.y = vzero(); x0.z = vzero(); w0 = vzero();
         x1.x = vzero(); x1.y = vzero(); x1.z = vzero(); w1 = vzero();
@@ -2177,6 +2178,7 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
                 lane(w1, l) = sat.w[c1];
             }
         }
+
 #endif
 
         VFloat w2 = vbroadcast(w_sum) - w1;
@@ -2536,7 +2538,7 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
 Decoder s_decoder = Decoder_D3D10;
 
 // D3D10
-inline void evaluate_palette4_d3d10(Color16 c0, Color16 c1, Color32 palette[4]) {
+inline void evaluate_palette4_d3d10(Color32 palette[4]) {
     palette[2].r = (2 * palette[0].r + palette[1].r) / 3;
     palette[2].g = (2 * palette[0].g + palette[1].g) / 3;
     palette[2].b = (2 * palette[0].b + palette[1].b) / 3;
@@ -2547,7 +2549,7 @@ inline void evaluate_palette4_d3d10(Color16 c0, Color16 c1, Color32 palette[4]) 
     palette[3].b = (2 * palette[1].b + palette[0].b) / 3;
     palette[3].a = 0xFF;
 }
-inline void evaluate_palette3_d3d10(Color16 c0, Color16 c1, Color32 palette[4]) {
+inline void evaluate_palette3_d3d10(Color32 palette[4]) {
     palette[2].r = (palette[0].r + palette[1].r) / 2;
     palette[2].g = (palette[0].g + palette[1].g) / 2;
     palette[2].b = (palette[0].b + palette[1].b) / 2;
@@ -2558,31 +2560,31 @@ static void evaluate_palette_d3d10(Color16 c0, Color16 c1, Color32 palette[4]) {
     palette[0] = bitexpand_color16_to_color32(c0);
     palette[1] = bitexpand_color16_to_color32(c1);
     if (c0.u > c1.u) {
-        evaluate_palette4_d3d10(c0, c1, palette);
+        evaluate_palette4_d3d10(palette);
     }
     else {
-        evaluate_palette3_d3d10(c0, c1, palette);
+        evaluate_palette3_d3d10(palette);
     }
 }
 
 // NV
 inline void evaluate_palette4_nv(Color16 c0, Color16 c1, Color32 palette[4]) {
     int gdiff = palette[1].g - palette[0].g;
-    palette[2].r = ((2 * c0.r + c1.r) * 22) / 8;
-    palette[2].g = (256 * palette[0].g + gdiff / 4 + 128 + gdiff * 80) / 256;
-    palette[2].b = ((2 * c0.b + c1.b) * 22) / 8;
+    palette[2].r = uint8(((2 * c0.r + c1.r) * 22) / 8);
+    palette[2].g = uint8((256 * palette[0].g + gdiff / 4 + 128 + gdiff * 80) / 256);
+    palette[2].b = uint8(((2 * c0.b + c1.b) * 22) / 8);
     palette[2].a = 0xFF;
 
-    palette[3].r = ((2 * c1.r + c0.r) * 22) / 8;
-    palette[3].g = (256 * palette[1].g - gdiff / 4 + 128 - gdiff * 80) / 256;
-    palette[3].b = ((2 * c1.b + c0.b) * 22) / 8;
+    palette[3].r = uint8(((2 * c1.r + c0.r) * 22) / 8);
+    palette[3].g = uint8((256 * palette[1].g - gdiff / 4 + 128 - gdiff * 80) / 256);
+    palette[3].b = uint8(((2 * c1.b + c0.b) * 22) / 8);
     palette[3].a = 0xFF;
 }
 inline void evaluate_palette3_nv(Color16 c0, Color16 c1, Color32 palette[4]) {
     int gdiff = palette[1].g - palette[0].g;
-    palette[2].r = ((c0.r + c1.r) * 33) / 8;
-    palette[2].g = (256 * palette[0].g + gdiff / 4 + 128 + gdiff * 128) / 256;
-    palette[2].b = ((c0.b + c1.b) * 33) / 8;
+    palette[2].r = uint8(((c0.r + c1.r) * 33) / 8);
+    palette[2].g = uint8((256 * palette[0].g + gdiff / 4 + 128 + gdiff * 128) / 256);
+    palette[2].b = uint8(((c0.b + c1.b) * 33) / 8);
     palette[2].a = 0xFF;
     palette[3].u = 0;
 }
@@ -2599,21 +2601,21 @@ static void evaluate_palette_nv(Color16 c0, Color16 c1, Color32 palette[4]) {
 }
 
 // AMD
-inline void evaluate_palette4_amd(Color16 c0, Color16 c1, Color32 palette[4]) {
-    palette[2].r = (43 * palette[0].r + 21 * palette[1].r + 32) >> 6;
-    palette[2].g = (43 * palette[0].g + 21 * palette[1].g + 32) >> 6;
-    palette[2].b = (43 * palette[0].b + 21 * palette[1].b + 32) >> 6;
+inline void evaluate_palette4_amd(Color32 palette[4]) {
+    palette[2].r = uint8((43 * palette[0].r + 21 * palette[1].r + 32) >> 6);
+    palette[2].g = uint8((43 * palette[0].g + 21 * palette[1].g + 32) >> 6);
+    palette[2].b = uint8((43 * palette[0].b + 21 * palette[1].b + 32) >> 6);
     palette[2].a = 0xFF;
 
-    palette[3].r = (43 * palette[1].r + 21 * palette[0].r + 32) >> 6;
-    palette[3].g = (43 * palette[1].g + 21 * palette[0].g + 32) >> 6;
-    palette[3].b = (43 * palette[1].b + 21 * palette[0].b + 32) >> 6;
+    palette[3].r = uint8((43 * palette[1].r + 21 * palette[0].r + 32) >> 6);
+    palette[3].g = uint8((43 * palette[1].g + 21 * palette[0].g + 32) >> 6);
+    palette[3].b = uint8((43 * palette[1].b + 21 * palette[0].b + 32) >> 6);
     palette[3].a = 0xFF;
 }
-inline void evaluate_palette3_amd(Color16 c0, Color16 c1, Color32 palette[4]) {
-    palette[2].r = (palette[0].r + palette[1].r + 1) / 2;
-    palette[2].g = (palette[0].g + palette[1].g + 1) / 2;
-    palette[2].b = (palette[0].b + palette[1].b + 1) / 2;
+inline void evaluate_palette3_amd(Color32 palette[4]) {
+    palette[2].r = uint8((palette[0].r + palette[1].r + 1) / 2);
+    palette[2].g = uint8((palette[0].g + palette[1].g + 1) / 2);
+    palette[2].b = uint8((palette[0].b + palette[1].b + 1) / 2);
     palette[2].a = 0xFF;
     palette[3].u = 0;
 }
@@ -2622,22 +2624,22 @@ static void evaluate_palette_amd(Color16 c0, Color16 c1, Color32 palette[4]) {
     palette[1] = bitexpand_color16_to_color32(c1);
 
     if (c0.u > c1.u) {
-        evaluate_palette4_amd(c0, c1, palette);
+        evaluate_palette4_amd(palette);
     }
     else {
-        evaluate_palette3_amd(c0, c1, palette);
+        evaluate_palette3_amd(palette);
     }
 }
 
 inline void evaluate_palette4(Color16 c0, Color16 c1, Color32 palette[4]) {
-    if (s_decoder == Decoder_D3D10)         evaluate_palette4_d3d10(c0, c1, palette);    
+    if (s_decoder == Decoder_D3D10)         evaluate_palette4_d3d10(palette);    
     else if (s_decoder == Decoder_NVIDIA)   evaluate_palette4_nv(c0, c1, palette);
-    else if (s_decoder == Decoder_AMD)      evaluate_palette4_amd(c0, c1, palette);
+    else if (s_decoder == Decoder_AMD)      evaluate_palette4_amd(palette);
 }
 inline void evaluate_palette3(Color16 c0, Color16 c1, Color32 palette[4]) {
-    if (s_decoder == Decoder_D3D10)         evaluate_palette3_d3d10(c0, c1, palette);
+    if (s_decoder == Decoder_D3D10)         evaluate_palette3_d3d10(palette);
     else if (s_decoder == Decoder_NVIDIA)   evaluate_palette3_nv(c0, c1, palette);
-    else if (s_decoder == Decoder_AMD)      evaluate_palette3_amd(c0, c1, palette);
+    else if (s_decoder == Decoder_AMD)      evaluate_palette3_amd(palette);
 }
 inline void evaluate_palette(Color16 c0, Color16 c1, Color32 palette[4]) {
     if (s_decoder == Decoder_D3D10)         evaluate_palette_d3d10(c0, c1, palette);
@@ -2693,22 +2695,9 @@ static float evaluate_mse(const Color32 & p, const Vector3 & c, const Vector3 & 
     return dot(d, d);
 }
 
-
-/*static float evaluate_mse(const Vector3 & p, const Vector3 & c, const Vector3 & w) {
-    return ww.x * square(p.x-c.x) + ww.y * square(p.y-c.y) + ww.z * square(p.z-c.z);
-}*/
-
 static int evaluate_mse(const Color32 & p, const Color32 & c) {
     return (square(int(p.r)-c.r) + square(int(p.g)-c.g) + square(int(p.b)-c.b));
 }
-
-/*static float evaluate_mse(const Vector3 palette[4], const Vector3 & c, const Vector3 & w) {
-    float e0 = evaluate_mse(palette[0], c, w);
-    float e1 = evaluate_mse(palette[1], c, w);
-    float e2 = evaluate_mse(palette[2], c, w);
-    float e3 = evaluate_mse(palette[3], c, w);
-    return min(min(e0, e1), min(e2, e3));
-}*/
 
 static int evaluate_mse(const Color32 palette[4], const Color32 & c) {
     int e0 = evaluate_mse(palette[0], c);
@@ -3263,7 +3252,7 @@ static inline int Lerp13(int a, int b)
 static void PrepareOptTable5(uint8 * table, Decoder decoder)
 {
     uint8 expand[32];
-    for (int i = 0; i < 32; i++) expand[i] = (i << 3) | (i >> 2);
+    for (int i = 0; i < 32; i++) expand[i] = uint8((i << 3) | (i >> 2));
 
     for (int i = 0; i < 256; i++) {
         int bestErr = 256 * 100;
@@ -3273,7 +3262,7 @@ static void PrepareOptTable5(uint8 * table, Decoder decoder)
                 int mine = expand[mn];
                 int maxe = expand[mx];
 
-                int err;
+                int err = 0;
 
                 int amd_r = (43 * maxe + 21 * mine + 32) >> 6;
                 int amd_err = abs(amd_r - i);
@@ -3301,8 +3290,8 @@ static void PrepareOptTable5(uint8 * table, Decoder decoder)
 
                 if (err < bestErr) {
                     bestErr = err;
-                    table[i * 2 + 0] = mx;
-                    table[i * 2 + 1] = mn;
+                    table[i * 2 + 0] = uint8(mx);
+                    table[i * 2 + 1] = uint8(mn);
                 }
             }
         }
@@ -3312,7 +3301,7 @@ static void PrepareOptTable5(uint8 * table, Decoder decoder)
 static void PrepareOptTable6(uint8 * table, Decoder decoder)
 {
     uint8 expand[64];
-    for (int i = 0; i < 64; i++) expand[i] = (i << 2) | (i >> 4);
+    for (int i = 0; i < 64; i++) expand[i] = uint8((i << 2) | (i >> 4));
 
     for (int i = 0; i < 256; i++) {
         int bestErr = 256 * 100;
@@ -3322,7 +3311,7 @@ static void PrepareOptTable6(uint8 * table, Decoder decoder)
                 int mine = expand[mn];
                 int maxe = expand[mx];
 
-                int err;
+                int err = 0;
 
                 int amd_g = (43 * maxe + 21 * mine + 32) >> 6;
                 int amd_err = abs(amd_g - i);
@@ -3350,8 +3339,8 @@ static void PrepareOptTable6(uint8 * table, Decoder decoder)
 
                 if (err < bestErr) {
                     bestErr = err;
-                    table[i * 2 + 0] = mx;
-                    table[i * 2 + 1] = mn;
+                    table[i * 2 + 0] = uint8(mx);
+                    table[i * 2 + 1] = uint8(mn);
                 }
             }
         }
