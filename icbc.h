@@ -376,6 +376,7 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) { return min(max(a, 0.0f), 1.0f); }
 ICBC_FORCEINLINE VFloat vround01(VFloat a) { return float(int(a + 0.5f)); }
 ICBC_FORCEINLINE VFloat lane_id() { return 0; }
 ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) { return mask ? b : a; }
+ICBC_FORCEINLINE VMask vbroadcast(bool b) { return b; }
 ICBC_FORCEINLINE bool all(VMask m) { return m; }
 ICBC_FORCEINLINE bool any(VMask m) { return m; }
 ICBC_FORCEINLINE uint mask(VMask m) { return (uint)m; }
@@ -509,6 +510,10 @@ ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
 #else
     return _mm_or_ps(_mm_andnot_ps(mask, a), _mm_and_ps(mask, b));
 #endif
+}
+
+ICBC_FORCEINLINE VMask vbroadcast(bool b) { 
+    return _mm_castsi128_ps(_mm_set1_epi32(-int32_t(b)));
 }
 
 ICBC_FORCEINLINE bool all(VMask m) {
@@ -700,6 +705,10 @@ ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return _mm256_xor_ps(A, B)
 // mask ? b : a
 ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
     return _mm256_blendv_ps(a, b, mask);
+}
+
+ICBC_FORCEINLINE VMask vbroadcast(bool b) { 
+    return _mm256_castsi256_ps(_mm256_set1_epi32(-int32_t(b)));
 }
 
 ICBC_FORCEINLINE bool all(VMask m) {
@@ -915,6 +924,10 @@ ICBC_FORCEINLINE VMask operator^ (VMask A, VMask B) { return { _mm512_kxor(A.m, 
 // mask ? b : a
 ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
     return _mm512_mask_blend_ps(mask.m, a, b);
+}
+
+ICBC_FORCEINLINE VMask vbroadcast(bool b) { 
+    return { __mmask16(-int16_t(b)) };
 }
 
 ICBC_FORCEINLINE bool all(VMask mask) {
