@@ -2671,15 +2671,7 @@ static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
 static void decode_dxt1(const BlockDXT1 * block, unsigned char rgba_block[16 * 4], Decoder decoder)
 {
     Color32 palette[4];
-    if (decoder == Decoder_NVIDIA) {
-        evaluate_palette_nv(block->col0, block->col1, palette);
-    }
-    else if (decoder == Decoder_AMD) {
-        evaluate_palette_amd(block->col0, block->col1, palette);
-    }
-    else {
-        evaluate_palette(block->col0, block->col1, palette);
-    }
+    evaluate_palette(block->col0, block->col1, palette, decoder);
 
     for (int i = 0; i < 16; i++) {
         int index = (block->indices >> (2 * i)) & 3;
@@ -2774,15 +2766,7 @@ static float evaluate_mse(const Vector4 input_colors[16], const float input_weig
 
 float evaluate_dxt1_error(const uint8 rgba_block[16*4], const BlockDXT1 * block, Decoder decoder) {
     Color32 palette[4];
-    if (decoder == Decoder_NVIDIA) {
-        evaluate_palette_nv(block->col0, block->col1, palette);
-    }
-    else if (decoder == Decoder_AMD) {
-        evaluate_palette_amd(block->col0, block->col1, palette);
-    }
-    else {
-        evaluate_palette(block->col0, block->col1, palette);
-    }
+    evaluate_palette(block->col0, block->col1, palette, decoder);
 
     // evaluate error for each index.
     float error = 0.0f;
@@ -3197,7 +3181,7 @@ static void PrepareOptTable5(uint8 * table, Decoder decoder)
                 int mine = expand[mn];
                 int maxe = expand[mx];
 
-                int err = 0;
+                int err;
 
                 int amd_r = (43 * maxe + 21 * mine + 32) >> 6;
                 int amd_err = abs(amd_r - i);
@@ -3216,11 +3200,11 @@ static void PrepareOptTable5(uint8 * table, Decoder decoder)
                     // Another approach is to consider the worst of AMD and NVIDIA errors.
                     err = max(amd_err, nv_err);                    
                 }
-                else if (decoder == Decoder_AMD) {
-                    err = amd_err;
-                }
                 else if (decoder == Decoder_NVIDIA) {
                     err = nv_err;
+                }
+                else /*if (decoder == Decoder_AMD)*/ {
+                    err = amd_err;
                 }
 
                 if (err < bestErr) {
@@ -3246,7 +3230,7 @@ static void PrepareOptTable6(uint8 * table, Decoder decoder)
                 int mine = expand[mn];
                 int maxe = expand[mx];
 
-                int err = 0;
+                int err;
 
                 int amd_g = (43 * maxe + 21 * mine + 32) >> 6;
                 int amd_err = abs(amd_g - i);
@@ -3265,11 +3249,11 @@ static void PrepareOptTable6(uint8 * table, Decoder decoder)
                     // Another approach is to consider the worst of AMD and NVIDIA errors.
                     err = max(amd_err, nv_err);
                 }
-                else if (decoder == Decoder_AMD) {
-                    err = amd_err;
-                }
                 else if (decoder == Decoder_NVIDIA) {
                     err = nv_err;
+                }
+                else /*if (decoder == Decoder_AMD)*/ {
+                    err = amd_err;
                 }
 
                 if (err < bestErr) {
