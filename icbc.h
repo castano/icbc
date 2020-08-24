@@ -57,6 +57,10 @@ namespace icbc {
     #define ICBC_X86 1
 #endif
 
+#if defined(__x86_64__) || defined(_M_X64)
+    #define ICBC_X64 1
+#endif
+
 #if (defined(__arm__) || defined(_M_ARM))
     #define ICBC_ARM 1
 #endif
@@ -76,7 +80,7 @@ namespace icbc {
             #define ICBC_SIMD ICBC_AVX1
         #elif __SSE4_1__
             #define ICBC_SIMD ICBC_SSE41
-        #elif __SSE2__
+        #elif __SSE2__ || ICBC_X64
             #define ICBC_SIMD ICBC_SSE2
         #else
             #define ICBC_SIMD ICBC_SCALAR
