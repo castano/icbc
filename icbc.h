@@ -724,6 +724,11 @@ ICBC_FORCEINLINE uint mask(VMask m) {
     return (uint)_mm256_movemask_ps(m);
 }
 
+// This is missing on some GCC versions.
+#if !defined _mm256_set_m128
+#define _mm256_set_m128(hi, lo) _mm256_insertf128_ps(_mm256_castps128_ps256(lo), (hi), 0x1)
+#endif
+
 ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
 
     __m128 vlow  = _mm256_castps256_ps128(v);
