@@ -281,21 +281,6 @@ static bool output_dxt_png(u32 w, u32 h, const u8* data, const char * filename, 
     return stbi_write_png(filename, w, h, 3, rgb_data, /*stride_in_bytes=*/w*3) != 0;
 }
 
-    FILE * fp = fopen(filename, "wb");
-    if (fp == nullptr) return false;
-
-    // Write header:
-    //fwrite(&ktx, sizeof(ktx), 1, fp);
-    //fwrite(&image_size, sizeof(u32), 1, fp);
-
-    // Write dxt data:
-    //fwrite(data, image_size, 1, fp);
-
-    fclose(fp);
-
-    return true;
-}
-
 
 ////////////////////////////////
 // DXT
