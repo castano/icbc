@@ -3161,12 +3161,6 @@ inline static void inset_bbox(Vector3 * __restrict c0, Vector3 * __restrict c1)
 static uint8 s_match5[256][2];
 static uint8 s_match6[256][2];
 
-static inline int Lerp13(int a, int b)
-{
-    // replace "/ 3" by "* 0xaaab) >> 17" if your compiler sucks or you really need every ounce of speed.
-    return (a * 2 + b) / 3;
-}
-
 static void PrepareOptTable5(uint8 * table, Decoder decoder)
 {
     uint8 expand[32];
