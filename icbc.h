@@ -15,7 +15,7 @@ namespace icbc {
         Decoder_AMD = 2
     };
 
-    void init_dxt1(Decoder decoder = Decoder_D3D10);
+    void init(Decoder decoder = Decoder_D3D10);
 
     enum Quality {
         Quality_Level1,  // Box fit + least squares fit.
@@ -33,10 +33,20 @@ namespace icbc {
         Quality_Max = Quality_Level9,
     };
 
-    void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
-    float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * block, Decoder decoder = Decoder_D3D10);
+    void decode_bc1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
+    void decode_bc3(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
+    //void decode_bc4(const void * block, bool snorm, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
+    //void decode_bc5(const void * block, bool snorm, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
 
-    float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool three_color_mode, bool three_color_black, void * output);
+    float evaluate_bc1_error(const unsigned char rgba_block[16 * 4], const void * block, Decoder decoder = Decoder_D3D10);
+    float evaluate_bc3_error(const unsigned char rgba_block[16 * 4], const void * block, bool alpha_blend, Decoder decoder = Decoder_D3D10);
+    //float evaluate_bc4_error(const float rgba_block[16 * 4], const void * block, bool snorm, Decoder decoder = Decoder_D3D10);
+    //float evaluate_bc5_error(const float rgba_block[16 * 4], const void * block, bool snorm, Decoder decoder = Decoder_D3D10);
+
+    float compress_bc1(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool three_color_mode, bool three_color_black, void * output);
+    float compress_bc3(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool six_alpha_mode, void * output);
+    //float compress_bc4(Quality level, const float * input_colors, const float * input_weights, bool snorm, bool six_alpha_mode, void * output);
+    //float compress_bc5(Quality level, const float * input_colors, const float * input_weights, bool snorm, bool six_alpha_mode, void * output);
 }
 
 #endif // ICBC_H
@@ -231,11 +241,28 @@ struct Color32 {
     };
 };
 
-struct BlockDXT1 {
+struct BlockBC1 {
     Color16 col0;
     Color16 col1;
     uint32 indices;
 };
+
+struct BlockBC4 {
+    uint8 alpha0;
+    uint8 alpha1;
+    uint8 indices[6];
+};
+
+struct BlockBC3 {
+    BlockBC4 alpha;
+    BlockBC1 rgb;
+};
+
+struct BlockBC5 {
+    BlockBC4 x;
+    BlockBC1 y;
+};
+
 
 
 struct Vector3 {
@@ -1778,7 +1805,7 @@ static inline Vector3 firstEigenVector_PowerMethod(const float *__restrict matri
 
     Vector3 v = estimatePrincipalComponent(matrix);
 
-    const int NUM = 8;
+    const int NUM = 6;
     for (int i = 0; i < NUM; i++)
     {
         float x = v.x * matrix[0] + v.y * matrix[1] + v.z * matrix[2];
@@ -2658,6 +2685,15 @@ inline void evaluate_palette(Color16 c0, Color16 c1, Color32 palette[4], Decoder
     else if (decoder == Decoder_AMD)      evaluate_palette_amd(c0, c1, palette);
 }
 
+inline void evaluate_palette4(Color16 c0, Color16 c1, Color32 palette[4], Decoder decoder = s_decoder) {
+    palette[0] = bitexpand_color16_to_color32(c0);
+    palette[1] = bitexpand_color16_to_color32(c1);
+
+    if (decoder == Decoder_D3D10)         evaluate_palette4_d3d10(palette);
+    else if (decoder == Decoder_NVIDIA)   evaluate_palette4_nv(c0, c1, palette);
+    else if (decoder == Decoder_AMD)      evaluate_palette4_amd(palette);
+}
+
 static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
     Color32 palette32[4];
     evaluate_palette(c0, c1, palette32);
@@ -2667,8 +2703,20 @@ static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
     }
 }
 
-static void decode_dxt1(const BlockDXT1 * block, unsigned char rgba_block[16 * 4], Decoder decoder)
-{
+static void evaluate_palette(uint8 alpha0, uint8  alpha1, uint8 alpha_palette[8], Decoder decoder) {
+    // @@ 
+    alpha_palette[0] = alpha0;
+    alpha_palette[1] = alpha1;
+    if (alpha0 > alpha1) {
+        // @@ 
+    }
+    else {
+        // @@
+    }
+}
+
+
+static void decode_bc1(const BlockBC1 * block, unsigned char rgba_block[16 * 4], Decoder decoder) {
     Color32 palette[4];
     evaluate_palette(block->col0, block->col1, palette, decoder);
 
@@ -2679,6 +2727,26 @@ static void decode_dxt1(const BlockDXT1 * block, unsigned char rgba_block[16 * 4
         rgba_block[4 * i + 1] = c.g;
         rgba_block[4 * i + 2] = c.b;
         rgba_block[4 * i + 3] = c.a;
+    }
+}
+ 
+static void decode_bc3(const BlockBC3 * block, unsigned char rgba_block[16 * 4], Decoder decoder) {
+    Color32 rgb_palette[4];
+    evaluate_palette4(block->rgb.col0, block->rgb.col1, rgb_palette, decoder);
+
+    uint8 alpha_palette[8];
+    evaluate_palette(block->alpha.alpha0, block->alpha.alpha1, alpha_palette, decoder);
+
+    for (int i = 0; i < 16; i++) {
+        int rgb_index = (block->rgb.indices >> (2 * i)) & 3;
+        Color32 c = rgb_palette[rgb_index];
+        rgba_block[4 * i + 0] = c.r;
+        rgba_block[4 * i + 1] = c.g;
+        rgba_block[4 * i + 2] = c.b;
+
+        int alpha_index = 0; // @@
+        uint8 alpha = alpha_palette[alpha_index];
+        rgba_block[4 * i + 3] = alpha;
     }
 }
 
@@ -2711,7 +2779,7 @@ static int evaluate_mse(const Color32 palette[4], const Color32 & c) {
 }
 
 // Returns MSE error in [0-255] range.
-static int evaluate_mse(const BlockDXT1 * output, Color32 color, int index) {
+static int evaluate_mse(const BlockBC1 * output, Color32 color, int index) {
     Color32 palette[4];
     evaluate_palette(output->col0, output->col1, palette);
 
@@ -2739,7 +2807,7 @@ static float evaluate_palette_error(Color32 palette[4], const Color32 * colors, 
     return total;
 }
 
-static float evaluate_mse(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, const BlockDXT1 * output) {
+static float evaluate_mse(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, const BlockBC1 * output) {
     Color32 palette[4];
     evaluate_palette(output->col0, output->col1, palette);
 
@@ -2763,7 +2831,7 @@ static float evaluate_mse(const Vector4 input_colors[16], const float input_weig
     return error;
 }
 
-float evaluate_dxt1_error(const uint8 rgba_block[16*4], const BlockDXT1 * block, Decoder decoder) {
+float evaluate_bc1_error(const uint8 rgba_block[16*4], const BlockBC1 * block, Decoder decoder) {
     Color32 palette[4];
     evaluate_palette(block->col0, block->col1, palette, decoder);
 
@@ -2780,6 +2848,32 @@ float evaluate_dxt1_error(const uint8 rgba_block[16*4], const BlockDXT1 * block,
     }
     return error;
 }
+
+float evaluate_bc3_error(const uint8 rgba_block[16*4], const BlockBC3 * block, bool alpha_blend, Decoder decoder) {
+    Color32 rgb_palette[4];
+    evaluate_palette4(block->rgb.col0, block->rgb.col1, rgb_palette, decoder);
+
+    uint8 alpha_palette[8];
+    evaluate_palette(block->alpha.alpha0, block->alpha.alpha1, alpha_palette, decoder);
+
+    // evaluate error for each index.
+    float error = 0.0f;
+    for (int i = 0; i < 16; i++) {
+        Color32 c;
+        c.r = rgba_block[4 * i + 0];
+        c.g = rgba_block[4 * i + 1];
+        c.b = rgba_block[4 * i + 2];
+        c.a = rgba_block[4 * i + 3];
+
+        int rgb_index = (block->rgb.indices >> (2 * i)) & 3;
+        int alpha_index = 0; // @@ 
+
+        error += (alpha_blend ? (c.a * 1.0f/255.0f) : 1.0f) * evaluate_mse(rgb_palette[rgb_index], c);
+        error += square(int(alpha_palette[alpha_index]) - c.a);
+    }
+    return error;
+}
+
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2945,7 +3039,7 @@ static uint compute_indices(const Vector4 input_colors[16], const Vector3 & colo
 }
 
 
-static float output_block3(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool allow_transparent_black, const Vector3 & v0, const Vector3 & v1, BlockDXT1 * block)
+static float output_block3(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool allow_transparent_black, const Vector3 & v0, const Vector3 & v1, BlockBC1 * block)
 {
     Color16 color0 = vector3_to_color16(v0);
     Color16 color1 = vector3_to_color16(v1);
@@ -2964,7 +3058,7 @@ static float output_block3(const Vector4 input_colors[16], const float input_wei
     return evaluate_mse(input_colors, input_weights, color_weights, palette, block->indices);
 }
 
-static float output_block4(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, const Vector3 & v0, const Vector3 & v1, BlockDXT1 * block)
+static float output_block4(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, const Vector3 & v0, const Vector3 & v1, BlockBC1 * block)
 {
     Color16 color0 = vector3_to_color16(v0);
     Color16 color1 = vector3_to_color16(v1);
@@ -3192,7 +3286,7 @@ static void init_single_color_tables(Decoder decoder)
 
 // Single color compressor, based on:
 // https://mollyrocket.com/forums/viewtopic.php?t=392
-static void compress_dxt1_single_color_optimal(Color32 c, BlockDXT1 * output)
+static void compress_dxt1_single_color_optimal(Color32 c, BlockBC1 * output)
 {
     output->col0.r = s_match5[c.r][0];
     output->col0.g = s_match6[c.g][0];
@@ -3210,7 +3304,7 @@ static void compress_dxt1_single_color_optimal(Color32 c, BlockDXT1 * output)
 }
 
 
-static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, bool try_transparent_black, bool allow_transparent_black, BlockDXT1 * output)
+static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, bool try_transparent_black, bool allow_transparent_black, BlockBC1 * output)
 {
     Vector3 metric_sqr = color_weights * color_weights;
 
@@ -3234,7 +3328,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
 
         cluster_fit_three(sat, sat_count, metric_sqr, &start, &end);
 
-        BlockDXT1 three_color_block;
+        BlockBC1 three_color_block;
         float three_color_error = output_block3(input_colors, input_weights, color_weights, allow_transparent_black, start, end, &three_color_block);
 
         if (three_color_error < best_error) {
@@ -3247,7 +3341,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
 }
 
 
-static float refine_endpoints(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, float input_error, BlockDXT1 * output) {
+static float refine_endpoints(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, float input_error, BlockBC1 * output) {
     // TODO:
     // - Optimize palette evaluation when updating only one channel.
     // - try all diagonals.
@@ -3288,7 +3382,7 @@ static float refine_endpoints(const Vector4 input_colors[16], const float input_
 
     int lastImprovement = 0;
     for (int i = 0; i < 256; i++) {
-        BlockDXT1 refined = *output;
+        BlockBC1 refined = *output;
         int8 delta[3] = { deltas[i % 16][0], deltas[i % 16][1], deltas[i % 16][2] };
 
         if ((i / 16) & 1) {
@@ -3403,7 +3497,7 @@ static Options setup_options(Quality level, bool enable_three_color_mode, bool e
 }
 
 
-static float compress_dxt1(Quality level, const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, bool three_color_black, BlockDXT1 * output)
+static float compress_bc1(Quality level, const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, bool three_color_black, BlockBC1 * output)
 {
     Options opt = setup_options(level, three_color_mode, three_color_black);
 
@@ -3447,7 +3541,7 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
 
         // Refine color for the selected indices.
         if (opt.least_squares_fit && optimize_end_points4(output->indices, input_colors, 16, &c0, &c1)) {
-            BlockDXT1 optimized_block;
+            BlockBC1 optimized_block;
             float optimized_error = output_block4(input_colors, input_weights, color_weights, c0, c1, &optimized_block);
 
             if (optimized_error < error) {
@@ -3464,7 +3558,7 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
         bool use_three_color_mode = opt.cluster_fit_3 || (use_three_color_black && opt.cluster_fit_3_black_only);
 
         // Try cluster fit.
-        BlockDXT1 cluster_fit_output;
+        BlockBC1 cluster_fit_output;
         float cluster_fit_error = compress_dxt1_cluster_fit(input_colors, input_weights, colors, weights, count, color_weights, use_three_color_mode, use_three_color_black, three_color_black, &cluster_fit_output);
         if (cluster_fit_error < error) {
             *output = cluster_fit_output;
@@ -3482,22 +3576,45 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
 
 // Public API
 
-void init_dxt1(Decoder decoder) {
+void init(Decoder decoder) {
     s_decoder = decoder;
     init_single_color_tables(decoder);
     init_cluster_tables();
 }
 
-void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
-    decode_dxt1((const BlockDXT1 *)block, rgba_block, decoder);
+void decode_bc1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
+    decode_bc1((const BlockBC1 *)block, rgba_block, decoder);
 }
 
-float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * dxt_block, Decoder decoder/*=Decoder_D3D10*/) {
-    return evaluate_dxt1_error(rgba_block, (const BlockDXT1 *)dxt_block, decoder);
+void decode_bc3(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
+    decode_bc3((const BlockBC3 *)block, rgba_block, decoder);
 }
 
-float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool three_color_mode, bool three_color_black, void * output) {
-    return compress_dxt1(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, three_color_mode, three_color_black, (BlockDXT1*)output);
+// void decode_bc4(const void * block, bool snorm, float rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
+//     decode_bc4((const BlockBC4 *)block, snorm, rgba_block, decoder);
+// }
+
+// void decode_bc5(const void * block, bool snorm, float rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
+//     decode_bc5((const BlockBC5 *)block, snorm, rgba_block, decoder);
+// }
+
+
+float evaluate_bc1_error(const unsigned char rgba_block[16 * 4], const void * dxt_block, Decoder decoder/*=Decoder_D3D10*/) {
+    return evaluate_bc1_error(rgba_block, (const BlockBC1 *)dxt_block, decoder);
+}
+
+float evaluate_bc3_error(const unsigned char rgba_block[16 * 4], const void * dxt_block, bool alpha_blend, Decoder decoder/*=Decoder_D3D10*/) {
+    return evaluate_bc3_error(rgba_block, (const BlockBC3 *)dxt_block, alpha_blend, decoder);
+}
+
+
+float compress_bc1(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool three_color_mode, bool three_color_black, void * output) {
+    return compress_bc1(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, three_color_mode, three_color_black, (BlockBC1*)output);
+}
+
+float compress_bc3(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool six_alpha_mode, void * output) {
+    //return compress_bc3(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, six_alpha_mode, (BlockBC3*)output);
+    return 0.0f; // @@ 
 }
 
 } // icbc
