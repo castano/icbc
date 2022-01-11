@@ -1117,34 +1117,18 @@ ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
 ICBC_FORCEINLINE bool all(VMask mask) {
     uint32x2_t m2 = vpmin_u32(vget_low_u32(mask), vget_high_u32(mask));
     uint32x2_t m1 = vpmin_u32(m2, m2);
-#if defined(_MSC_VER)
-    return m1.n64_u32[0] != 0;
-#else
-    return m1[0] != 0;
-#endif
+    return vget_lane_u32(m1, 0) != 0;
 }
 
 ICBC_FORCEINLINE bool any(VMask mask) {
     uint32x2_t m2 = vpmax_u32(vget_low_u32(mask), vget_high_u32(mask));
     uint32x2_t m1 = vpmax_u32(m2, m2);
-#if defined(_MSC_VER)
-    return m1.n64_u32[0] != 0;
-#else
-    return m1[0] != 0;
-#endif
+    return vget_lane_u32(m1, 0) != 0;
 }
 
-// @@ Is this the best we can do?
-// From: https://github.com/jratcliff63367/sse2neon/blob/master/SSE2NEON.h
 ICBC_FORCEINLINE uint mask(VMask b) {
     const uint32x4_t movemask = { 1, 2, 4, 8 };
     return vaddvq_u32(vandq_u32(b, movemask));
-	// static const uint32x4_t movemask = { 1, 2, 4, 8 };
-	// static const uint32x4_t highbit = { 0x80000000, 0x80000000, 0x80000000, 0x80000000 };
-	// uint32x4_t t1 = vtstq_u32(b, highbit);
-	// uint32x4_t t2 = vandq_u32(t1, movemask);
-	// uint32x2_t t3 = vorr_u32(vget_low_u32(t2), vget_high_u32(t2));
-	// return vget_lane_u32(t3, 0) | vget_lane_u32(t3, 1);
 }
 
 ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
