@@ -55,3 +55,7 @@ Gulftown - vc2017/x64 - 2020/07/31
     SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 1.118810 (1.054073)
     SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 1.245808 (1.177381)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 2.440240 (2.320139)
+
+Apple M1 Pro - clang 13.0 - 2020/11/16
+    Neon:   RMSE = 6.916    PSNR = 31.333   TIME = 0.310935 (0.302868)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 0.844785 (0.834892)
