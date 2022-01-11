@@ -1136,40 +1136,22 @@ ICBC_FORCEINLINE bool any(VMask mask) {
 
 // @@ Is this the best we can do?
 // From: https://github.com/jratcliff63367/sse2neon/blob/master/SSE2NEON.h
-ICBC_FORCEINLINE uint mask(VMask mask) {
-	static const uint32x4_t movemask = { 1, 2, 4, 8 };
-	static const uint32x4_t highbit = { 0x80000000, 0x80000000, 0x80000000, 0x80000000 };
-	uint32x4_t t1 = vtstq_u32(mask, highbit);
-	uint32x4_t t2 = vandq_u32(t1, movemask);
-	uint32x2_t t3 = vorr_u32(vget_low_u32(t2), vget_high_u32(t2));
-	return vget_lane_u32(t3, 0) | vget_lane_u32(t3, 1);
+ICBC_FORCEINLINE uint mask(VMask b) {
+    const uint32x4_t movemask = { 1, 2, 4, 8 };
+    return vaddvq_u32(vandq_u32(b, movemask));
+	// static const uint32x4_t movemask = { 1, 2, 4, 8 };
+	// static const uint32x4_t highbit = { 0x80000000, 0x80000000, 0x80000000, 0x80000000 };
+	// uint32x4_t t1 = vtstq_u32(b, highbit);
+	// uint32x4_t t2 = vandq_u32(t1, movemask);
+	// uint32x2_t t3 = vorr_u32(vget_low_u32(t2), vget_high_u32(t2));
+	// return vget_lane_u32(t3, 0) | vget_lane_u32(t3, 1);
 }
 
-inline int reduce_min_index(VFloat v) {
-#if 0
-    float32x2_t m2 = vpmin_f32(vget_low_u32(V), vget_high_u32(v));
+ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
+    float32x2_t m2 = vpmin_f32(vget_low_u32(v), vget_high_u32(v));
     float32x2_t m1 = vpmin_f32(m2, m2);
-    float min_value = vget_lane_f32(m1, 0);
-    VFloat vmin = vbroadcast(min_value);
-
-    // (v <= vmin)
-
-    // @@ Find the lane that contains minValue?
-#endif
-
-    // @@ Is there a better way to do this reduction?
-    int min_idx = 0;
-    float min_value = lane(v, 0);
-
-    for (int i = 1; i < VEC_SIZE; i++) {
-        float value = lane(v, i);
-        if (value < min_value) {
-            min_value = value;
-            min_idx = i;
-        }
-    }
-
-    return min_idx;
+    VFloat vmin = vdupq_lane_f32(m1, 0);
+    return ctz(mask(v <= vmin));
 }
 
 // https://github.com/Maratyszcza/NNPACK/blob/master/src/neon/transpose.h
