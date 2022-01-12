@@ -86,7 +86,7 @@ inline u64 timer_time() {
 inline double timer_frequency() {
     mach_timebase_info_data_t mach_timebase;
     mach_timebase_info(&mach_timebase);
-    return double(mach_timebase.denom) * 1e9;
+    return double(mach_timebase.denom) / mach_timebase.numer * 1e9;
 }
 inline u64 timer_time() {
     return mach_absolute_time();
