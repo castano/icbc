@@ -61,8 +61,12 @@ namespace icbc {
     #define ICBC_X64 1
 #endif
 
-#if (defined(__arm__) || defined(_M_ARM))
+#if defined(__arm__) || defined(_M_ARM) || defined(__aarch64__) || defined(_M_ARM64)
     #define ICBC_ARM 1
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+    #define ICBC_ARM64 1
 #endif
 
 #if (defined(__PPC__) || defined(_M_PPC))
@@ -1080,19 +1084,13 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
 }
 
 ICBC_FORCEINLINE VFloat vround01(VFloat a) {
-#if __ARM_RACH >= 8
-    return vrndqn_f32(a);   // Round to integral (to nearest, ties to even)
-#else
-    return vcvtq_f32_s32(vcvtq_s32_f32(a + vbroadcast(0.5)));
-#endif
+    return vrndnq_f32(a);   // Round to integral (to nearest, ties to even)
+    //return vcvtq_f32_s32(vcvtq_s32_f32(a + vbroadcast(0.5)));
 }
 
 ICBC_FORCEINLINE VFloat vtruncate(VFloat a) {
-#if __ARM_RACH >= 8
     return vrndq_f32(a);
-#else
-    return vcvtq_f32_s32(vcvtq_s32_f32(a));
-#endif
+    //return vcvtq_f32_s32(vcvtq_s32_f32(a));
 }
 
 ICBC_FORCEINLINE VFloat lane_id() {
