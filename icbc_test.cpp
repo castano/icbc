@@ -9,8 +9,8 @@
 //#define ICBC_SIMD 3         // AVX
 //#define ICBC_SIMD 4         // AVX2
 //#define ICBC_SIMD 5         // AVX512
-//#define ICBC_SIMD 6         // NEON
-//#define ICBC_SIMD 7         // VMX
+//#define ICBC_SIMD -1         // NEON
+//#define ICBC_SIMD -2         // VMX
 
 #define ICBC_IMPLEMENTATION
 #include "icbc.h"
