@@ -1113,15 +1113,17 @@ ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
 }
 
 ICBC_FORCEINLINE bool all(VMask mask) {
-    uint32x2_t m2 = vpmin_u32(vget_low_u32(mask), vget_high_u32(mask));
-    uint32x2_t m1 = vpmin_u32(m2, m2);
-    return vget_lane_u32(m1, 0) != 0;
+    return vminvq_u32(mask) != 0;
+    // uint32x2_t m2 = vpmin_u32(vget_low_u32(mask), vget_high_u32(mask));
+    // uint32x2_t m1 = vpmin_u32(m2, m2);
+    // return vget_lane_u32(m1, 0) != 0;
 }
 
 ICBC_FORCEINLINE bool any(VMask mask) {
-    uint32x2_t m2 = vpmax_u32(vget_low_u32(mask), vget_high_u32(mask));
-    uint32x2_t m1 = vpmax_u32(m2, m2);
-    return vget_lane_u32(m1, 0) != 0;
+    return vmaxvq_u32(mask) != 0;
+    // uint32x2_t m2 = vpmax_u32(vget_low_u32(mask), vget_high_u32(mask));
+    // uint32x2_t m1 = vpmax_u32(m2, m2);
+    // return vget_lane_u32(m1, 0) != 0;
 }
 
 ICBC_FORCEINLINE uint mask(VMask b) {
