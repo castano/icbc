@@ -1,0 +1,65 @@
+
+Rasperry Pi - gcc 8.3 - 2020/05/14
+    Neon:  RMSE = 6.906	    PSNR = 31.346	TIME = 5.719120 (5.701821)
+	Float: RMSE = 6.906	    PSNR = 31.346	TIME = 11.536309 (11.447170)
+
+Raspberry Pi - gcc 8.3 - 2020/05/30
+	Neon:  RMSE = 6.912	    PSNR = 31.339	TIME = 5.520404 (5.470292)
+	Float: RMSE = 6.912	    PSNR = 31.339	TIME = 10.290935 (10.265525)
+
+Raspberry Pi - Neon - gcc 8.3 - 2020/05/30
+    q1:    RMSE = 7.394	    PSNR = 30.753	TIME = 0.330453 (0.318691)
+    q2:    RMSE = 7.380	    PSNR = 30.769	TIME = 0.652932 (0.632926)
+    q3:    RMSE = 7.202	    PSNR = 30.982	TIME = 0.756020 (0.742441)
+    q4:    RMSE = 7.049	    PSNR = 31.169	TIME = 1.011262 (0.993692)
+    q5:    RMSE = 6.971	    PSNR = 31.265	TIME = 1.553520 (1.538473)
+    q6:    RMSE = 6.938	    PSNR = 31.307	TIME = 2.303139 (2.266457)
+    q7:    RMSE = 6.926	    PSNR = 31.321	TIME = 3.830098 (3.788544)
+    q8:    RMSE = 6.916	    PSNR = 31.333	TIME = 5.098788 (5.079539)
+    q9:    RMSE = 6.894	    PSNR = 31.361	TIME = 8.725668 (8.707515)
+
+Cofee Lake - clang 11.0.0 - 2020/05/30
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.242974 (0.225702)
+    AVX1:   RMSE = 6.916    PSNR = 31.333   TIME = 0.386521 (0.370077)
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 0.424463 (0.405616)
+    SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.444171 (0.419927)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 0.959968 (0.941949)
+
+Sky Lake - vc2019/x64 - 2020/05/30
+    AVX512: RMSE = 6.916    PSNR = 31.333   TIME = 0.170101 (0.165569)
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.272625 (0.267651)
+    AVX1:   RMSE = 6.916    PSNR = 31.333   TIME = 0.537877 (0.530867)
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 0.546121 (0.538032)
+    SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.605700 (0.598670)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 1.543131 (1.519419)  // Note, compiling with /arch:AVX# produces much slower code.
+
+Haswell - clang 11.0.0 - 2020/05/31
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.568070 (0.545250)
+    AVX1:   RMSE = 6.916    PSNR = 31.333   TIME = 0.863462 (0.840429)
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 1.080115 (1.053109)
+    SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 1.135764 (1.103072)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 2.515645 (2.458320)
+
+Sky Lake - vc2019/x64 - 2020/05/31
+    AVX512: RMSE = 6.916    PSNR = 31.333   TIME = 0.166147 (0.161710)
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.271278 (0.265888)
+
+Raspberry Pi - gcc 8.3 - 2020/06/11
+	Neon:   RMSE = 6.916    PSNR = 31.333	TIME = 4.869383 (4.837136)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 9.983787 (9.971635)
+
+Sky Lake - vc2019/x64 - 2020/05/30
+    AVX512: RMSE = 6.916    PSNR = 31.333   TIME = 0.162747 (0.155880)
+
+Gulftown - vc2017/x64 - 2020/07/31
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 1.118810 (1.054073)
+    SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 1.245808 (1.177381)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 2.440240 (2.320139)
+
+Apple M1 Pro - clang 13.0 - 2022/01/11
+    Neon:   RMSE = 6.916    PSNR = 31.333   TIME = 0.290521 (0.285169)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 0.844785 (0.834892)
+
+Apple M1 Pro - clang 13.0 - 2022/05/21
+    Neon:   RMSE = 6.916    PSNR = 31.333   TIME = 0.261387 (0.253627)
+
