@@ -2033,8 +2033,8 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         // Load 4 uint8 per lane. @@ Ideally I should pack this better and load only 2.
         VInt packedClusterIndex = vload((int *)&s_threeCluster[i]);
 
-        VInt c0 = (packedClusterIndex & 0xFF);
-        VInt c1 = ((packedClusterIndex >> 8)); // No need for & 0xFF
+        VInt c0 = (packedClusterIndex & 0xFF) - 1;
+        VInt c1 = (packedClusterIndex >> 8) - 1; // No need for & 0xFF
 
         if (count <= 8) {
             // Load sat.r in one register:
@@ -2043,15 +2043,15 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             VFloat bLo = vload(sat.b);
             VFloat wLo = vload(sat.w);
 
-            x0.x = vpermuteif(c0>0, rLo, c0-1);
-            x0.y = vpermuteif(c0>0, gLo, c0-1);
-            x0.z = vpermuteif(c0>0, bLo, c0-1);
-            w0   = vpermuteif(c0>0, wLo, c0-1);
+            x0.x = vpermuteif(c0 >= 0, rLo, c0);
+            x0.y = vpermuteif(c0 >= 0, gLo, c0);
+            x0.z = vpermuteif(c0 >= 0, bLo, c0);
+            w0   = vpermuteif(c0 >= 0, wLo, c0);
 
-            x1.x = vpermuteif(c1>0, rLo, c1-1);
-            x1.y = vpermuteif(c1>0, gLo, c1-1);
-            x1.z = vpermuteif(c1>0, bLo, c1-1);
-            w1   = vpermuteif(c1>0, wLo, c1-1);
+            x1.x = vpermuteif(c1 >= 0, rLo, c1);
+            x1.y = vpermuteif(c1 >= 0, gLo, c1);
+            x1.z = vpermuteif(c1 >= 0, bLo, c1);
+            w1   = vpermuteif(c1 >= 0, wLo, c1);
         }
         else {
             // Load sat.r in two registers:
@@ -2060,15 +2060,15 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             VFloat bLo = vload(sat.b); VFloat bHi = vload(sat.b + 8);
             VFloat wLo = vload(sat.w); VFloat wHi = vload(sat.w + 8);
 
-            x0.x = vpermute2if(c0>0, rLo, rHi, c0-1);
-            x0.y = vpermute2if(c0>0, gLo, gHi, c0-1);
-            x0.z = vpermute2if(c0>0, bLo, bHi, c0-1);
-            w0   = vpermute2if(c0>0, wLo, wHi, c0-1);
+            x0.x = vpermute2if(c0 >= 0, rLo, rHi, c0);
+            x0.y = vpermute2if(c0 >= 0, gLo, gHi, c0);
+            x0.z = vpermute2if(c0 >= 0, bLo, bHi, c0);
+            w0   = vpermute2if(c0 >= 0, wLo, wHi, c0);
 
-            x1.x = vpermute2if(c1>0, rLo, rHi, c1-1);
-            x1.y = vpermute2if(c1>0, gLo, gHi, c1-1);
-            x1.z = vpermute2if(c1>0, bLo, bHi, c1-1);
-            w1   = vpermute2if(c1>0, wLo, wHi, c1-1);
+            x1.x = vpermute2if(c1 >= 0, rLo, rHi, c1);
+            x1.y = vpermute2if(c1 >= 0, gLo, gHi, c1);
+            x1.z = vpermute2if(c1 >= 0, bLo, bHi, c1);
+            w1   = vpermute2if(c1 >= 0, wLo, wHi, c1);
         }
 
 #elif ICBC_USE_NEON_VTL
@@ -2271,7 +2271,7 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
 
         VInt c0 = (packedClusterIndex & 0xFF) - 1;
         VInt c1 = ((packedClusterIndex >> 8) & 0xFF) - 1;
-        VInt c2 = ((packedClusterIndex >> 16)) - 1; // @@ No need for &
+        VInt c2 = ((packedClusterIndex >> 16)) - 1; // No need for &
 
         x0.x = vpermuteif(c0 >= 0, vrsat, c0);
         x0.y = vpermuteif(c0 >= 0, vgsat, c0);
@@ -2293,9 +2293,9 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         // Load 4 uint8 per lane.
         VInt packedClusterIndex = vload((int *)&s_fourCluster[i]);
 
-        VInt c0 = (packedClusterIndex & 0xFF);
-        VInt c1 = ((packedClusterIndex >> 8) & 0xFF);
-        VInt c2 = ((packedClusterIndex >> 16)); // @@ No need for &
+        VInt c0 = (packedClusterIndex & 0xFF) - 1;
+        VInt c1 = ((packedClusterIndex >> 8) & 0xFF) - 1;
+        VInt c2 = ((packedClusterIndex >> 16)) - 1; // No need for &
 
         if (count <= 8) {
             // Load sat.r in one register:
