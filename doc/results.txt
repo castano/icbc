@@ -59,3 +59,7 @@ Gulftown - vc2017/x64 - 2020/07/31
 Apple M1 Pro - clang 13.0 - 2022/01/11
     Neon:   RMSE = 6.916    PSNR = 31.333   TIME = 0.290521 (0.285169)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 0.844785 (0.834892)
+
+Apple M1 Pro - clang 13.0 - 2022/05/21
+    Neon:   RMSE = 6.916    PSNR = 31.333   TIME = 0.261387 (0.253627)
+
