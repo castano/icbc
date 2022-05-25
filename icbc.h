@@ -2344,6 +2344,40 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
 
 #elif ICBC_USE_NEON_VTL
 
+        /*
+        // c0 = { pq[12],pq[12],pq[12],pq[12], pq[8],pq[8],pq[8],pq[8], pq[4],pq[4],pq[4],pq[4], pq[0],pq[0],pq[0],pq[0] }
+        // idx0 = (c0 - 1) * 4 + byte_offset
+        // idx0 = c0 == 0 ? 255 : idx0
+
+        // c1 = { pq[13],pq[13],pq[13],pq[13], pq[9],pq[9],pq[9],pq[9], pq[5],pq[5],pq[5],pq[5], pq[1],pq[1],pq[1],pq[1] }
+        // idx1 = (c1 - 1) * 4 + byte_offset
+        // idx1 = c1 == 0 ? 255 : idx1
+
+        // c2 = { pq[14],pq[14],pq[14],pq[14], pq[10],pq[10],pq[10],pq[10], pq[6],pq[6],pq[6],pq[6], pq[2],pq[2],pq[2],pq[2] }
+        // idx2 = (c2 - 1) * 4 + byte_offset
+        // idx2 = c2 == 0 ? 255 : idx2
+
+        uint8x16_t packedClusterIndex = (uint8x16_t &)s_fourCluster[i];
+
+        const uint8x16_t byte_offsets = {0,1,2,3, 0,1,2,3, 0,1,2,3, 0,1,2,3};
+        uint8x16_t indices = {0,0,0,0, 4,4,4,4, 8,8,8,8, 12,12,12,12};
+
+        uint8x16_t c0 = vqtbl1q_u8(packedClusterIndex, indices);
+        uint8x16_t idx0 = vaddq_u8(vshlq_n_u8(vsubq_u8(c0, vdupq_n_u8(1)), 2), byte_offsets); // (c0 - 1) * 4 + byte_offsets
+        idx0 = vorrq_u8(idx0, vceqzq_u8(c0));  // idx0 = c0 == 0 ? 255 : idx0
+
+        indices = vaddq_u8(indices, vdupq_n_u8(1));
+        uint8x16_t c1 = vqtbl1q_u8(packedClusterIndex, indices);
+        uint8x16_t idx1 = vaddq_u8(vshlq_n_u8(vsubq_u8(c1, vdupq_n_u8(1)), 2), byte_offsets); // (c1 - 1) * 4 + byte_offsets
+        idx1 = vorrq_u8(idx1, vceqzq_u8(c1));  // idx1 = c1 == 0 ? 255 : idx1
+
+        indices = vaddq_u8(indices, vdupq_n_u8(1));
+        uint8x16_t c2 = vqtbl1q_u8(packedClusterIndex, indices);
+        uint8x16_t idx2 = vaddq_u8(vshlq_n_u8(vsubq_u8(c2, vdupq_n_u8(1)), 2), byte_offsets); // (c2 - 1) * 4 + byte_offsets
+        idx2 = vorrq_u8(idx2, vceqzq_u8(c2));  // idx2 = c2 == 0 ? 255 : bc0
+        */
+
+        // Loading the precomputed byte indices is faster than computing them on the fly.
         uint8x16_t idx0 = (uint8x16_t &)s_neon_vtl_index0_4[4*i];
         uint8x16_t idx1 = (uint8x16_t &)s_neon_vtl_index1_4[4*i];
         uint8x16_t idx2 = (uint8x16_t &)s_neon_vtl_index2_4[4*i];
