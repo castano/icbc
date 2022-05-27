@@ -71,8 +71,12 @@ namespace icbc {
     #define ICBC_X64 1
 #endif
 
-#if (defined(__arm__) || defined(_M_ARM))
+#if defined(__arm__) || defined(_M_ARM) || defined(__aarch64__) || defined(_M_ARM64)
     #define ICBC_ARM 1
+#endif
+
+#if defined(__aarch64__) || defined(_M_ARM64)
+    #define ICBC_ARM64 1
 #endif
 
 #if (defined(__PPC__) || defined(_M_PPC))
@@ -132,7 +136,7 @@ namespace icbc {
 #endif
 
 #if ICBC_SIMD == ICBC_NEON
-#define ICBC_USE_NEON_VTL 0         // Not tested.
+#define ICBC_USE_NEON_VTL 1         // Enable this for a ~11% performance improvement.
 #endif
 
 
@@ -1107,19 +1111,13 @@ ICBC_FORCEINLINE VFloat vsaturate(VFloat a) {
 }
 
 ICBC_FORCEINLINE VFloat vround01(VFloat a) {
-#if __ARM_RACH >= 8
-    return vrndqn_f32(a);   // Round to integral (to nearest, ties to even)
-#else
-    return vcvtq_f32_s32(vcvtq_s32_f32(a + vbroadcast(0.5)));
-#endif
+    return vrndnq_f32(a);   // Round to integral (to nearest, ties to even)
+    //return vcvtq_f32_s32(vcvtq_s32_f32(a + vbroadcast(0.5)));
 }
 
 ICBC_FORCEINLINE VFloat vtruncate(VFloat a) {
-#if __ARM_RACH >= 8
     return vrndq_f32(a);
-#else
-    return vcvtq_f32_s32(vcvtq_s32_f32(a));
-#endif
+    //return vcvtq_f32_s32(vcvtq_s32_f32(a));
 }
 
 ICBC_FORCEINLINE VFloat lane_id() {
@@ -1142,61 +1140,29 @@ ICBC_FORCEINLINE VFloat vselect(VMask mask, VFloat a, VFloat b) {
 }
 
 ICBC_FORCEINLINE bool all(VMask mask) {
-    uint32x2_t m2 = vpmin_u32(vget_low_u32(mask), vget_high_u32(mask));
-    uint32x2_t m1 = vpmin_u32(m2, m2);
-#if defined(_MSC_VER)
-    return m1.n64_u32[0] != 0;
-#else
-    return m1[0] != 0;
-#endif
+    return vminvq_u32(mask) != 0;
+    // uint32x2_t m2 = vpmin_u32(vget_low_u32(mask), vget_high_u32(mask));
+    // uint32x2_t m1 = vpmin_u32(m2, m2);
+    // return vget_lane_u32(m1, 0) != 0;
 }
 
 ICBC_FORCEINLINE bool any(VMask mask) {
-    uint32x2_t m2 = vpmax_u32(vget_low_u32(mask), vget_high_u32(mask));
-    uint32x2_t m1 = vpmax_u32(m2, m2);
-#if defined(_MSC_VER)
-    return m1.n64_u32[0] != 0;
-#else
-    return m1[0] != 0;
-#endif
+    return vmaxvq_u32(mask) != 0;
+    // uint32x2_t m2 = vpmax_u32(vget_low_u32(mask), vget_high_u32(mask));
+    // uint32x2_t m1 = vpmax_u32(m2, m2);
+    // return vget_lane_u32(m1, 0) != 0;
 }
 
-// @@ Is this the best we can do?
-// From: https://github.com/jratcliff63367/sse2neon/blob/master/SSE2NEON.h
-ICBC_FORCEINLINE uint mask(VMask mask) {
-	static const uint32x4_t movemask = { 1, 2, 4, 8 };
-	static const uint32x4_t highbit = { 0x80000000, 0x80000000, 0x80000000, 0x80000000 };
-	uint32x4_t t1 = vtstq_u32(mask, highbit);
-	uint32x4_t t2 = vandq_u32(t1, movemask);
-	uint32x2_t t3 = vorr_u32(vget_low_u32(t2), vget_high_u32(t2));
-	return vget_lane_u32(t3, 0) | vget_lane_u32(t3, 1);
+ICBC_FORCEINLINE uint mask(VMask b) {
+    const uint32x4_t movemask = { 1, 2, 4, 8 };
+    return vaddvq_u32(vandq_u32(b, movemask));
 }
 
-inline int reduce_min_index(VFloat v) {
-#if 0
-    float32x2_t m2 = vpmin_f32(vget_low_u32(V), vget_high_u32(v));
+ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
+    float32x2_t m2 = vpmin_f32(vget_low_u32(v), vget_high_u32(v));
     float32x2_t m1 = vpmin_f32(m2, m2);
-    float min_value = vget_lane_f32(m1, 0);
-    VFloat vmin = vbroadcast(min_value);
-
-    // (v <= vmin)
-
-    // @@ Find the lane that contains minValue?
-#endif
-
-    // @@ Is there a better way to do this reduction?
-    int min_idx = 0;
-    float min_value = lane(v, 0);
-
-    for (int i = 1; i < VEC_SIZE; i++) {
-        float value = lane(v, i);
-        if (value < min_value) {
-            min_value = value;
-            min_idx = i;
-        }
-    }
-
-    return min_idx;
+    VFloat vmin = vdupq_lane_f32(m1, 0);
+    return ctz(mask(v <= vmin));
 }
 
 // https://github.com/Maratyszcza/NNPACK/blob/master/src/neon/transpose.h
@@ -2008,36 +1974,36 @@ static void init_cluster_tables() {
 #if ICBC_USE_NEON_VTL
     for (int i = 0; i < 968; i++) {
         int c0 = (s_fourCluster[i].c0) - 1;
-        s_neon_vtl_index0_4[4 * i + 0] = uint8(c0 * 4 + 0);
-        s_neon_vtl_index0_4[4 * i + 1] = uint8(c0 * 4 + 1);
-        s_neon_vtl_index0_4[4 * i + 2] = uint8(c0 * 4 + 2);
-        s_neon_vtl_index0_4[4 * i + 3] = uint8(c0 * 4 + 3);
+        s_neon_vtl_index0_4[4 * i + 0] = c0 >= 0 ? uint8(c0 * 4 + 0) : 255;
+        s_neon_vtl_index0_4[4 * i + 1] = c0 >= 0 ? uint8(c0 * 4 + 1) : 255;
+        s_neon_vtl_index0_4[4 * i + 2] = c0 >= 0 ? uint8(c0 * 4 + 2) : 255;
+        s_neon_vtl_index0_4[4 * i + 3] = c0 >= 0 ? uint8(c0 * 4 + 3) : 255;
 
         int c1 = (s_fourCluster[i].c1) - 1;
-        s_neon_vtl_index1_4[4 * i + 0] = uint8(c1 * 4 + 0);
-        s_neon_vtl_index1_4[4 * i + 1] = uint8(c1 * 4 + 1);
-        s_neon_vtl_index1_4[4 * i + 2] = uint8(c1 * 4 + 2);
-        s_neon_vtl_index1_4[4 * i + 3] = uint8(c1 * 4 + 3);
+        s_neon_vtl_index1_4[4 * i + 0] = c1 >= 0 ? uint8(c1 * 4 + 0) : 255;
+        s_neon_vtl_index1_4[4 * i + 1] = c1 >= 0 ? uint8(c1 * 4 + 1) : 255;
+        s_neon_vtl_index1_4[4 * i + 2] = c1 >= 0 ? uint8(c1 * 4 + 2) : 255;
+        s_neon_vtl_index1_4[4 * i + 3] = c1 >= 0 ? uint8(c1 * 4 + 3) : 255;
 
         int c2 = (s_fourCluster[i].c2) - 1;
-        s_neon_vtl_index2_4[4 * i + 0] = uint8(c2 * 4 + 0);
-        s_neon_vtl_index2_4[4 * i + 1] = uint8(c2 * 4 + 1);
-        s_neon_vtl_index2_4[4 * i + 2] = uint8(c2 * 4 + 2);
-        s_neon_vtl_index2_4[4 * i + 3] = uint8(c2 * 4 + 3);
+        s_neon_vtl_index2_4[4 * i + 0] = c2 >= 0 ? uint8(c2 * 4 + 0) : 255;
+        s_neon_vtl_index2_4[4 * i + 1] = c2 >= 0 ? uint8(c2 * 4 + 1) : 255;
+        s_neon_vtl_index2_4[4 * i + 2] = c2 >= 0 ? uint8(c2 * 4 + 2) : 255;
+        s_neon_vtl_index2_4[4 * i + 3] = c2 >= 0 ? uint8(c2 * 4 + 3) : 255;
     }
 
     for (int i = 0; i < 152; i++) {
         int c0 = (s_threeCluster[i].c0) - 1;
-        s_neon_vtl_index0_3[4 * i + 0] = uint8(c0 * 4 + 0);
-        s_neon_vtl_index0_3[4 * i + 1] = uint8(c0 * 4 + 1);
-        s_neon_vtl_index0_3[4 * i + 2] = uint8(c0 * 4 + 2);
-        s_neon_vtl_index0_3[4 * i + 3] = uint8(c0 * 4 + 3);
+        s_neon_vtl_index0_3[4 * i + 0] = c0 >= 0 ? uint8(c0 * 4 + 0) : 255;
+        s_neon_vtl_index0_3[4 * i + 1] = c0 >= 0 ? uint8(c0 * 4 + 1) : 255;
+        s_neon_vtl_index0_3[4 * i + 2] = c0 >= 0 ? uint8(c0 * 4 + 2) : 255;
+        s_neon_vtl_index0_3[4 * i + 3] = c0 >= 0 ? uint8(c0 * 4 + 3) : 255;
 
         int c1 = (s_threeCluster[i].c1) - 1;
-        s_neon_vtl_index1_3[4 * i + 0] = uint8(c1 * 4 + 0);
-        s_neon_vtl_index1_3[4 * i + 1] = uint8(c1 * 4 + 1);
-        s_neon_vtl_index1_3[4 * i + 2] = uint8(c1 * 4 + 2);
-        s_neon_vtl_index1_3[4 * i + 3] = uint8(c1 * 4 + 3);
+        s_neon_vtl_index1_3[4 * i + 0] = c1 >= 0 ? uint8(c1 * 4 + 0) : 255;
+        s_neon_vtl_index1_3[4 * i + 1] = c1 >= 0 ? uint8(c1 * 4 + 1) : 255;
+        s_neon_vtl_index1_3[4 * i + 2] = c1 >= 0 ? uint8(c1 * 4 + 2) : 255;
+        s_neon_vtl_index1_3[4 * i + 3] = c1 >= 0 ? uint8(c1 * 4 + 3) : 255;
     }
 #endif
 }
@@ -2094,8 +2060,8 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         // Load 4 uint8 per lane. @@ Ideally I should pack this better and load only 2.
         VInt packedClusterIndex = vload((int *)&s_threeCluster[i]);
 
-        VInt c0 = (packedClusterIndex & 0xFF);
-        VInt c1 = ((packedClusterIndex >> 8)); // No need for & 0xFF
+        VInt c0 = (packedClusterIndex & 0xFF) - 1;
+        VInt c1 = (packedClusterIndex >> 8) - 1; // No need for & 0xFF
 
         if (count <= 8) {
             // Load sat.r in one register:
@@ -2104,15 +2070,15 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             VFloat bLo = vload(sat.b);
             VFloat wLo = vload(sat.w);
 
-            x0.x = vpermuteif(c0>0, rLo, c0-1);
-            x0.y = vpermuteif(c0>0, gLo, c0-1);
-            x0.z = vpermuteif(c0>0, bLo, c0-1);
-            w0   = vpermuteif(c0>0, wLo, c0-1);
+            x0.x = vpermuteif(c0 >= 0, rLo, c0);
+            x0.y = vpermuteif(c0 >= 0, gLo, c0);
+            x0.z = vpermuteif(c0 >= 0, bLo, c0);
+            w0   = vpermuteif(c0 >= 0, wLo, c0);
 
-            x1.x = vpermuteif(c1>0, rLo, c1-1);
-            x1.y = vpermuteif(c1>0, gLo, c1-1);
-            x1.z = vpermuteif(c1>0, bLo, c1-1);
-            w1   = vpermuteif(c1>0, wLo, c1-1);
+            x1.x = vpermuteif(c1 >= 0, rLo, c1);
+            x1.y = vpermuteif(c1 >= 0, gLo, c1);
+            x1.z = vpermuteif(c1 >= 0, bLo, c1);
+            w1   = vpermuteif(c1 >= 0, wLo, c1);
         }
         else {
             // Load sat.r in two registers:
@@ -2121,15 +2087,15 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             VFloat bLo = vload(sat.b); VFloat bHi = vload(sat.b + 8);
             VFloat wLo = vload(sat.w); VFloat wHi = vload(sat.w + 8);
 
-            x0.x = vpermute2if(c0>0, rLo, rHi, c0-1);
-            x0.y = vpermute2if(c0>0, gLo, gHi, c0-1);
-            x0.z = vpermute2if(c0>0, bLo, bHi, c0-1);
-            w0   = vpermute2if(c0>0, wLo, wHi, c0-1);
+            x0.x = vpermute2if(c0 >= 0, rLo, rHi, c0);
+            x0.y = vpermute2if(c0 >= 0, gLo, gHi, c0);
+            x0.z = vpermute2if(c0 >= 0, bLo, bHi, c0);
+            w0   = vpermute2if(c0 >= 0, wLo, wHi, c0);
 
-            x1.x = vpermute2if(c1>0, rLo, rHi, c1-1);
-            x1.y = vpermute2if(c1>0, gLo, gHi, c1-1);
-            x1.z = vpermute2if(c1>0, bLo, bHi, c1-1);
-            w1   = vpermute2if(c1>0, wLo, wHi, c1-1);
+            x1.x = vpermute2if(c1 >= 0, rLo, rHi, c1);
+            x1.y = vpermute2if(c1 >= 0, gLo, gHi, c1);
+            x1.z = vpermute2if(c1 >= 0, bLo, bHi, c1);
+            w1   = vpermute2if(c1 >= 0, wLo, wHi, c1);
         }
 
 #elif ICBC_USE_NEON_VTL
@@ -2137,11 +2103,11 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
         uint8x16_t idx0 = (uint8x16_t &)s_neon_vtl_index0_3[4*i];
         uint8x16_t idx1 = (uint8x16_t &)s_neon_vtl_index1_3[4*i];
 
-        if (count <= 4) {
-            uint8x16_t rsat1 = vld1q_u8((uint8*)sat.r);
-            uint8x16_t gsat1 = vld1q_u8((uint8*)sat.g);
-            uint8x16_t bsat1 = vld1q_u8((uint8*)sat.b);
-            uint8x16_t wsat1 = vld1q_u8((uint8*)sat.w);
+        /*if (count <= 4) {
+            uint8x16_t rsat1 = (uint8x16_t&)sat.r;
+            uint8x16_t gsat1 = (uint8x16_t&)sat.g;
+            uint8x16_t bsat1 = (uint8x16_t&)sat.b;
+            uint8x16_t wsat1 = (uint8x16_t&)sat.w;
 
             x0.x = vreinterpretq_f32_u8(vqtbl1q_u8(rsat1, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl1q_u8(gsat1, idx0));
@@ -2153,11 +2119,12 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             x1.z = vreinterpretq_f32_u8(vqtbl1q_u8(bsat1, idx1));
             w1   = vreinterpretq_f32_u8(vqtbl1q_u8(wsat1, idx1));
         }
-        else if (count <= 8) {
-            uint8x16x2_t rsat2 = vld2q_u8((uint8*)sat.r);
-            uint8x16x2_t gsat2 = vld2q_u8((uint8*)sat.g);
-            uint8x16x2_t bsat2 = vld2q_u8((uint8*)sat.b);
-            uint8x16x2_t wsat2 = vld2q_u8((uint8*)sat.w);
+        else*/
+        if (count <= 8) {
+            uint8x16x2_t rsat2 = (uint8x16x2_t&)sat.r;
+            uint8x16x2_t gsat2 = (uint8x16x2_t&)sat.g;
+            uint8x16x2_t bsat2 = (uint8x16x2_t&)sat.b;
+            uint8x16x2_t wsat2 = (uint8x16x2_t&)sat.w;
 
             x0.x = vreinterpretq_f32_u8(vqtbl2q_u8(rsat2, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl2q_u8(gsat2, idx0));
@@ -2170,10 +2137,10 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             w1   = vreinterpretq_f32_u8(vqtbl2q_u8(wsat2, idx1));
         }
         else if (count <= 12) {
-            uint8x16x3_t rsat3 = vld3q_u8((uint8*)sat.r);
-            uint8x16x3_t gsat3 = vld3q_u8((uint8*)sat.g);
-            uint8x16x3_t bsat3 = vld3q_u8((uint8*)sat.b);
-            uint8x16x3_t wsat3 = vld3q_u8((uint8*)sat.w);
+            uint8x16x3_t rsat3 = (uint8x16x3_t&)sat.r;
+            uint8x16x3_t gsat3 = (uint8x16x3_t&)sat.g;
+            uint8x16x3_t bsat3 = (uint8x16x3_t&)sat.b;
+            uint8x16x3_t wsat3 = (uint8x16x3_t&)sat.w;
 
             x0.x = vreinterpretq_f32_u8(vqtbl3q_u8(rsat3, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl3q_u8(gsat3, idx0));
@@ -2186,11 +2153,10 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             w1   = vreinterpretq_f32_u8(vqtbl3q_u8(wsat3, idx1));
         }
         else {
-            // Load SAT.
-            uint8x16x4_t rsat4 = vld4q_u8((uint8*)sat.r);
-            uint8x16x4_t gsat4 = vld4q_u8((uint8*)sat.g);
-            uint8x16x4_t bsat4 = vld4q_u8((uint8*)sat.b);
-            uint8x16x4_t wsat4 = vld4q_u8((uint8*)sat.w);
+            uint8x16x4_t rsat4 = (uint8x16x4_t&)sat.r;
+            uint8x16x4_t gsat4 = (uint8x16x4_t&)sat.g;
+            uint8x16x4_t bsat4 = (uint8x16x4_t&)sat.b;
+            uint8x16x4_t wsat4 = (uint8x16x4_t&)sat.w;
 
             x0.x = vreinterpretq_f32_u8(vqtbl4q_u8(rsat4, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl4q_u8(gsat4, idx0));
@@ -2332,7 +2298,7 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
 
         VInt c0 = (packedClusterIndex & 0xFF) - 1;
         VInt c1 = ((packedClusterIndex >> 8) & 0xFF) - 1;
-        VInt c2 = ((packedClusterIndex >> 16)) - 1; // @@ No need for &
+        VInt c2 = ((packedClusterIndex >> 16)) - 1; // No need for &
 
         x0.x = vpermuteif(c0 >= 0, vrsat, c0);
         x0.y = vpermuteif(c0 >= 0, vgsat, c0);
@@ -2354,9 +2320,9 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         // Load 4 uint8 per lane.
         VInt packedClusterIndex = vload((int *)&s_fourCluster[i]);
 
-        VInt c0 = (packedClusterIndex & 0xFF);
-        VInt c1 = ((packedClusterIndex >> 8) & 0xFF);
-        VInt c2 = ((packedClusterIndex >> 16)); // @@ No need for &
+        VInt c0 = (packedClusterIndex & 0xFF) - 1;
+        VInt c1 = ((packedClusterIndex >> 8) & 0xFF) - 1;
+        VInt c2 = ((packedClusterIndex >> 16)) - 1; // No need for &
 
         if (count <= 8) {
             // Load sat.r in one register:
@@ -2365,20 +2331,20 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             VFloat bLo = vload(sat.b);
             VFloat wLo = vload(sat.w);
 
-            x0.x = vpermuteif(c0>0, rLo, c0-1);
-            x0.y = vpermuteif(c0>0, gLo, c0-1);
-            x0.z = vpermuteif(c0>0, bLo, c0-1);
-            w0   = vpermuteif(c0>0, wLo, c0-1);
+            x0.x = vpermuteif(c0 >= 0, rLo, c0);
+            x0.y = vpermuteif(c0 >= 0, gLo, c0);
+            x0.z = vpermuteif(c0 >= 0, bLo, c0);
+            w0   = vpermuteif(c0 >= 0, wLo, c0);
 
-            x1.x = vpermuteif(c1>0, rLo, c1-1);
-            x1.y = vpermuteif(c1>0, gLo, c1-1);
-            x1.z = vpermuteif(c1>0, bLo, c1-1);
-            w1   = vpermuteif(c1>0, wLo, c1-1);
+            x1.x = vpermuteif(c1 >= 0, rLo, c1);
+            x1.y = vpermuteif(c1 >= 0, gLo, c1);
+            x1.z = vpermuteif(c1 >= 0, bLo, c1);
+            w1   = vpermuteif(c1 >= 0, wLo, c1);
 
-            x2.x = vpermuteif(c2>0, rLo, c2-1);
-            x2.y = vpermuteif(c2>0, gLo, c2-1);
-            x2.z = vpermuteif(c2>0, bLo, c2-1);
-            w2   = vpermuteif(c2>0, wLo, c2-1);
+            x2.x = vpermuteif(c2 >= 0, rLo, c2);
+            x2.y = vpermuteif(c2 >= 0, gLo, c2);
+            x2.z = vpermuteif(c2 >= 0, bLo, c2);
+            w2   = vpermuteif(c2 >= 0, wLo, c2);
         }
         else {
             // Load sat.r in two registers:
@@ -2387,33 +2353,67 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             VFloat bLo = vload(sat.b); VFloat bHi = vload(sat.b + 8);
             VFloat wLo = vload(sat.w); VFloat wHi = vload(sat.w + 8);
 
-            x0.x = vpermute2if(c0>0, rLo, rHi, c0-1);
-            x0.y = vpermute2if(c0>0, gLo, gHi, c0-1);
-            x0.z = vpermute2if(c0>0, bLo, bHi, c0-1);
-            w0   = vpermute2if(c0>0, wLo, wHi, c0-1);
+            x0.x = vpermute2if(c0 >= 0, rLo, rHi, c0);
+            x0.y = vpermute2if(c0 >= 0, gLo, gHi, c0);
+            x0.z = vpermute2if(c0 >= 0, bLo, bHi, c0);
+            w0   = vpermute2if(c0 >= 0, wLo, wHi, c0);
 
-            x1.x = vpermute2if(c1>0, rLo, rHi, c1-1);
-            x1.y = vpermute2if(c1>0, gLo, gHi, c1-1);
-            x1.z = vpermute2if(c1>0, bLo, bHi, c1-1);
-            w1   = vpermute2if(c1>0, wLo, wHi, c1-1);
+            x1.x = vpermute2if(c1 >= 0, rLo, rHi, c1);
+            x1.y = vpermute2if(c1 >= 0, gLo, gHi, c1);
+            x1.z = vpermute2if(c1 >= 0, bLo, bHi, c1);
+            w1   = vpermute2if(c1 >= 0, wLo, wHi, c1);
 
-            x2.x = vpermute2if(c2>0, rLo, rHi, c2-1);
-            x2.y = vpermute2if(c2>0, gLo, gHi, c2-1);
-            x2.z = vpermute2if(c2>0, bLo, bHi, c2-1);
-            w2   = vpermute2if(c2>0, wLo, wHi, c2-1);
+            x2.x = vpermute2if(c2 >= 0, rLo, rHi, c2);
+            x2.y = vpermute2if(c2 >= 0, gLo, gHi, c2);
+            x2.z = vpermute2if(c2 >= 0, bLo, bHi, c2);
+            w2   = vpermute2if(c2 >= 0, wLo, wHi, c2);
         }
 
 #elif ICBC_USE_NEON_VTL
 
+        /*
+        // c0 = { pq[12],pq[12],pq[12],pq[12], pq[8],pq[8],pq[8],pq[8], pq[4],pq[4],pq[4],pq[4], pq[0],pq[0],pq[0],pq[0] }
+        // idx0 = (c0 - 1) * 4 + byte_offset
+        // idx0 = c0 == 0 ? 255 : idx0
+
+        // c1 = { pq[13],pq[13],pq[13],pq[13], pq[9],pq[9],pq[9],pq[9], pq[5],pq[5],pq[5],pq[5], pq[1],pq[1],pq[1],pq[1] }
+        // idx1 = (c1 - 1) * 4 + byte_offset
+        // idx1 = c1 == 0 ? 255 : idx1
+
+        // c2 = { pq[14],pq[14],pq[14],pq[14], pq[10],pq[10],pq[10],pq[10], pq[6],pq[6],pq[6],pq[6], pq[2],pq[2],pq[2],pq[2] }
+        // idx2 = (c2 - 1) * 4 + byte_offset
+        // idx2 = c2 == 0 ? 255 : idx2
+
+        uint8x16_t packedClusterIndex = (uint8x16_t &)s_fourCluster[i];
+
+        const uint8x16_t byte_offsets = {0,1,2,3, 0,1,2,3, 0,1,2,3, 0,1,2,3};
+        uint8x16_t indices = {0,0,0,0, 4,4,4,4, 8,8,8,8, 12,12,12,12};
+
+        uint8x16_t c0 = vqtbl1q_u8(packedClusterIndex, indices);
+        uint8x16_t idx0 = vaddq_u8(vshlq_n_u8(vsubq_u8(c0, vdupq_n_u8(1)), 2), byte_offsets); // (c0 - 1) * 4 + byte_offsets
+        idx0 = vorrq_u8(idx0, vceqzq_u8(c0));  // idx0 = c0 == 0 ? 255 : idx0
+
+        indices = vaddq_u8(indices, vdupq_n_u8(1));
+        uint8x16_t c1 = vqtbl1q_u8(packedClusterIndex, indices);
+        uint8x16_t idx1 = vaddq_u8(vshlq_n_u8(vsubq_u8(c1, vdupq_n_u8(1)), 2), byte_offsets); // (c1 - 1) * 4 + byte_offsets
+        idx1 = vorrq_u8(idx1, vceqzq_u8(c1));  // idx1 = c1 == 0 ? 255 : idx1
+
+        indices = vaddq_u8(indices, vdupq_n_u8(1));
+        uint8x16_t c2 = vqtbl1q_u8(packedClusterIndex, indices);
+        uint8x16_t idx2 = vaddq_u8(vshlq_n_u8(vsubq_u8(c2, vdupq_n_u8(1)), 2), byte_offsets); // (c2 - 1) * 4 + byte_offsets
+        idx2 = vorrq_u8(idx2, vceqzq_u8(c2));  // idx2 = c2 == 0 ? 255 : bc0
+        */
+
+        // Loading the precomputed byte indices is faster than computing them on the fly.
         uint8x16_t idx0 = (uint8x16_t &)s_neon_vtl_index0_4[4*i];
         uint8x16_t idx1 = (uint8x16_t &)s_neon_vtl_index1_4[4*i];
         uint8x16_t idx2 = (uint8x16_t &)s_neon_vtl_index2_4[4*i];
 
-        if (count <= 4) {
-            uint8x16_t rsat1 = vld1q_u8((uint8*)sat.r);
-            uint8x16_t gsat1 = vld1q_u8((uint8*)sat.g);
-            uint8x16_t bsat1 = vld1q_u8((uint8*)sat.b);
-            uint8x16_t wsat1 = vld1q_u8((uint8*)sat.w);
+        /*if (count <= 4) {
+            uint8x16_t rsat1 = (uint8x16_t&)sat.r;
+            uint8x16_t gsat1 = (uint8x16_t&)sat.g;
+            uint8x16_t bsat1 = (uint8x16_t&)sat.b;
+            uint8x16_t wsat1 = (uint8x16_t&)sat.w;
 
             x0.x = vreinterpretq_f32_u8(vqtbl1q_u8(rsat1, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl1q_u8(gsat1, idx0));
@@ -2430,11 +2430,12 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             x2.z = vreinterpretq_f32_u8(vqtbl1q_u8(bsat1, idx2));
             w2   = vreinterpretq_f32_u8(vqtbl1q_u8(wsat1, idx2));
         }
-        else if (count <= 8) {
-            uint8x16x2_t rsat2 = vld2q_u8((uint8*)sat.r);
-            uint8x16x2_t gsat2 = vld2q_u8((uint8*)sat.g);
-            uint8x16x2_t bsat2 = vld2q_u8((uint8*)sat.b);
-            uint8x16x2_t wsat2 = vld2q_u8((uint8*)sat.w);
+        else*/ 
+        if (count <= 8) {
+            uint8x16x2_t rsat2 = (uint8x16x2_t&)sat.r;
+            uint8x16x2_t gsat2 = (uint8x16x2_t&)sat.g;
+            uint8x16x2_t bsat2 = (uint8x16x2_t&)sat.b;
+            uint8x16x2_t wsat2 = (uint8x16x2_t&)sat.w;
 
             x0.x = vreinterpretq_f32_u8(vqtbl2q_u8(rsat2, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl2q_u8(gsat2, idx0));
@@ -2452,10 +2453,10 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             w2   = vreinterpretq_f32_u8(vqtbl2q_u8(wsat2, idx2));
         }
         else if (count <= 12) {
-            uint8x16x3_t rsat3 = vld3q_u8((uint8*)sat.r);
-            uint8x16x3_t gsat3 = vld3q_u8((uint8*)sat.g);
-            uint8x16x3_t bsat3 = vld3q_u8((uint8*)sat.b);
-            uint8x16x3_t wsat3 = vld3q_u8((uint8*)sat.w);
+            uint8x16x3_t rsat3 = (uint8x16x3_t&)sat.r;
+            uint8x16x3_t gsat3 = (uint8x16x3_t&)sat.g;
+            uint8x16x3_t bsat3 = (uint8x16x3_t&)sat.b;
+            uint8x16x3_t wsat3 = (uint8x16x3_t&)sat.w;
 
             x0.x = vreinterpretq_f32_u8(vqtbl3q_u8(rsat3, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl3q_u8(gsat3, idx0));
@@ -2473,10 +2474,10 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             w2   = vreinterpretq_f32_u8(vqtbl3q_u8(wsat3, idx2));
         }
         else {
-            uint8x16x4_t rsat4 = vld4q_u8((uint8*)sat.r);
-            uint8x16x4_t gsat4 = vld4q_u8((uint8*)sat.g);
-            uint8x16x4_t bsat4 = vld4q_u8((uint8*)sat.b);
-            uint8x16x4_t wsat4 = vld4q_u8((uint8*)sat.w);
+            uint8x16x4_t rsat4 = (uint8x16x4_t&)sat.r;
+            uint8x16x4_t gsat4 = (uint8x16x4_t&)sat.g;
+            uint8x16x4_t bsat4 = (uint8x16x4_t&)sat.b;
+            uint8x16x4_t wsat4 = (uint8x16x4_t&)sat.w;
 
             x0.x = vreinterpretq_f32_u8(vqtbl4q_u8(rsat4, idx0));
             x0.y = vreinterpretq_f32_u8(vqtbl4q_u8(gsat4, idx0));

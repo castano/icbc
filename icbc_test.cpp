@@ -9,8 +9,8 @@
 //#define ICBC_SIMD 3         // AVX
 //#define ICBC_SIMD 4         // AVX2
 //#define ICBC_SIMD 5         // AVX512
-//#define ICBC_SIMD 6         // NEON
-//#define ICBC_SIMD 7         // VMX
+//#define ICBC_SIMD -1         // NEON
+//#define ICBC_SIMD -2         // VMX
 
 #define ICBC_IMPLEMENTATION
 #include "icbc.h"
@@ -86,7 +86,7 @@ inline u64 timer_time() {
 inline double timer_frequency() {
     mach_timebase_info_data_t mach_timebase;
     mach_timebase_info(&mach_timebase);
-    return double(mach_timebase.denom) * 1e9;
+    return double(mach_timebase.denom) / mach_timebase.numer * 1e9;
 }
 inline u64 timer_time() {
     return mach_absolute_time();
