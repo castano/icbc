@@ -412,7 +412,7 @@ bool encode_image(const char * input_filename) {
         estimate.add(timer.stop());
     }
 
-    float mse = evaluate_dxt1_mse(rgba_block_data, block_data, block_count);
+    float mse = evaluate_bc1_mse(rgba_block_data, block_data, block_count);
 
     char output_filename[1024];
     if (output_dds) {
@@ -513,7 +513,7 @@ int main(int argc, char * argv[]) {
         }
     }
 
-    icbc::init_dxt1(decoder);
+    icbc::init(decoder);
     int thread_count = ic::init_pfor();
     printf("Using %d threads.\n", thread_count);
 
