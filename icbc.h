@@ -12,7 +12,7 @@ namespace icbc {
     enum Decoder {
         Decoder_D3D10 = 0,
         Decoder_NVIDIA = 1,
-        Decoder_AMD = 2,
+        Decoder_AMD = 2,    // Apple's M1 decoder appears to match AMD's
         Decoder_Intel = 3
     };
 
