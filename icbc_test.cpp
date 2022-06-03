@@ -210,6 +210,26 @@ static bool output_dxt_dds(u32 w, u32 h, const u8* data, const char * filename) 
     return true;
 }
 
+static bool compare_dxt_dds(u32 w, u32 h, const u8* data, const char * filename) {
+
+    u32 size = 8 * (((w+3)/4) * ((h+3)/4)); // linear size
+    void * original = malloc(size);
+    defer { free(original); };
+
+    FILE * fp = fopen(filename, "rb");
+    if (fp == nullptr) return false;
+
+    // Skip header:
+    fseek(fp, 128, SEEK_SET);
+
+    // Read dxt data:
+    fread(original, size, 1, fp);
+
+    fclose(fp);
+
+    return memcmp(original, data, size) == 0;
+}
+
 static bool output_dxt_ktx(u32 w, u32 h, const u8* data, const char * filename) {
 
     const u32 GL_COMPRESSED_RGB_S3TC_DXT1_EXT = 0x83F0;
@@ -265,7 +285,7 @@ static bool output_dxt_png(u32 w, u32 h, const u8* data, const char * filename, 
     for (int y = 0; y < h; y += 4) {
         for (int x = 0; x < w; x += 4) {
             unsigned char rgba_block[16 * 4];
-            icbc::decode_dxt1(data, rgba_block, decoder);
+            icbc::decode_bc1(data, rgba_block, decoder);
             data += 8;
 
             for (int yy = 0; yy < 4; yy++) {
@@ -286,10 +306,10 @@ static bool output_dxt_png(u32 w, u32 h, const u8* data, const char * filename, 
 // DXT
 
 // Returns mse.
-static float evaluate_dxt1_mse(u8 * rgba, u8 * block, int block_count, icbc::Decoder decoder = icbc::Decoder_D3D10) {
+static float evaluate_bc1_mse(u8 * rgba, u8 * block, int block_count, icbc::Decoder decoder = icbc::Decoder_D3D10) {
     double total = 0.0f;
     for (int b = 0; b < block_count; b++) {
-        total += icbc::evaluate_dxt1_error(rgba, block, decoder);
+        total += icbc::evaluate_bc1_error(rgba, block, decoder);
         rgba += 4 * 4 * 4;
         block += 8;
     }
@@ -308,6 +328,7 @@ static float mse_to_psnr(float mse) {
 bool output_dds = false;
 bool output_ktx = false;
 bool output_png = false;
+bool compare_dds = false;
 int repeat_count = 1;
 icbc::Decoder decoder = icbc::Decoder_D3D10;
 icbc::Quality quality_level = icbc::Quality_Default;
@@ -384,14 +405,14 @@ bool encode_image(const char * input_filename) {
                 input_weights[j] = 1.0f;
             }
 
-            icbc::compress_dxt1(quality_level, input_colors, input_weights, color_weights, /*three_color_mode=*/true, /*three_color_black=*/true, (block_data + b * 8));
+            icbc::compress_bc1(quality_level, input_colors, input_weights, color_weights, /*three_color_mode=*/true, /*three_color_black=*/true, (block_data + b * 8));
         };
         //});
 
         estimate.add(timer.stop());
     }
 
-    float mse = evaluate_dxt1_mse(rgba_block_data, block_data, block_count, decoder);
+    float mse = evaluate_bc1_mse(rgba_block_data, block_data, block_count, decoder);
 
     char output_filename[1024];
     if (output_dds) {
@@ -405,6 +426,12 @@ bool encode_image(const char * input_filename) {
     if (output_png) {
         snprintf(output_filename, 1024, "%.*s_bc1.png", int(strchr(input_filename, '.')-input_filename), input_filename);
         output_dxt_png(bw, bh, block_data, output_filename, decoder);
+    }
+    if (compare_dds) {
+        snprintf(output_filename, 1024, "%.*s_bc1.dds", int(strchr(input_filename, '.')-input_filename), input_filename);
+        if (!compare_dxt_dds(bw, bh, block_data, output_filename)) {
+            printf("\nFiles differ!!!");
+        }
     }
 
     total_block_count += block_count;
@@ -460,6 +487,9 @@ int main(int argc, char * argv[]) {
         else if (strcmp(argv[i], "-png") == 0) {
             output_png = true;
         }
+        else if (strcmp(argv[i], "-cmp") == 0) {
+            compare_dds = true;
+        }
         else if (strncmp(argv[i], "-q", 2) == 0) {
             if (argv[i][2]) {
                 quality_level = (icbc::Quality)(argv[i][2] - '1');
@@ -484,7 +514,7 @@ int main(int argc, char * argv[]) {
         }
     }
 
-    icbc::init_dxt1(decoder);
+    icbc::init(decoder);
     int thread_count = ic::init_pfor();
     printf("Using %d threads.\n", thread_count);
 

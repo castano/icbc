@@ -16,7 +16,7 @@ namespace icbc {
         Decoder_Intel = 3
     };
 
-    void init_dxt1(Decoder decoder = Decoder_D3D10);
+    void init(Decoder decoder = Decoder_D3D10);
 
     enum Quality {
         Quality_Level1,  // Box fit + least squares fit.
@@ -34,10 +34,20 @@ namespace icbc {
         Quality_Max = Quality_Level9,
     };
 
-    void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
-    float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * block, Decoder decoder = Decoder_D3D10);
+    void decode_bc1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
+    void decode_bc3(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
+    //void decode_bc4(const void * block, bool snorm, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
+    //void decode_bc5(const void * block, bool snorm, unsigned char rgba_block[16 * 4], Decoder decoder = Decoder_D3D10);
 
-    float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool three_color_mode, bool three_color_black, void * output);
+    float evaluate_bc1_error(const unsigned char rgba_block[16 * 4], const void * block, Decoder decoder = Decoder_D3D10);
+    float evaluate_bc3_error(const unsigned char rgba_block[16 * 4], const void * block, bool alpha_blend, Decoder decoder = Decoder_D3D10);
+    //float evaluate_bc4_error(const float rgba_block[16 * 4], const void * block, bool snorm, Decoder decoder = Decoder_D3D10);
+    //float evaluate_bc5_error(const float rgba_block[16 * 4], const void * block, bool snorm, Decoder decoder = Decoder_D3D10);
+
+    float compress_bc1(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool three_color_mode, bool three_color_black, void * output);
+    float compress_bc3(Quality level, const float * input_colors, const float * input_weights, const float color_weights[3], bool six_alpha_mode, void * output);
+    //float compress_bc4(Quality level, const float * input_colors, const float * input_weights, bool snorm, bool six_alpha_mode, void * output);
+    //float compress_bc5(Quality level, const float * input_colors, const float * input_weights, bool snorm, bool six_alpha_mode, void * output);
 }
 
 #endif // ICBC_H
@@ -127,7 +137,11 @@ namespace icbc {
 #endif
 
 #if ICBC_SIMD == ICBC_NEON
-#define ICBC_USE_NEON_VTL 1         // Enable this for a ~11% performance improvement.
+#define ICBC_USE_NEON_VTL 1         // Enable this for a 0.89x performance improvement.
+#endif
+
+#if ICBC_SIMD == ICBC_SSE41
+#define ICBC_USE_SSSE3_SHUFFLEB 1   // Enable this for 0.88x performance improvement.
 #endif
 
 
@@ -236,11 +250,28 @@ struct Color32 {
     };
 };
 
-struct BlockDXT1 {
+struct BlockBC1 {
     Color16 col0;
     Color16 col1;
     uint32 indices;
 };
+
+struct BlockBC4 {
+    uint8 alpha0;
+    uint8 alpha1;
+    uint8 indices[6];
+};
+
+struct BlockBC3 {
+    BlockBC4 alpha;
+    BlockBC1 rgb;
+};
+
+struct BlockBC5 {
+    BlockBC4 x;
+    BlockBC1 y;
+};
+
 
 
 struct Vector3 {
@@ -564,6 +595,45 @@ ICBC_FORCEINLINE void vtranspose4(VFloat & r0, VFloat & r1, VFloat & r2, VFloat 
     r2 = _mm_movelh_ps(t2, t3);
     r3 = _mm_movehl_ps(t3, t2);
 }
+
+
+#if ICBC_SIMD == ICBC_SSE41
+
+ICBC_FORCEINLINE VFloat vpermute2(VFloat tab0, VFloat tab1, __m128i idx) {
+
+    // @@ Precompute this:
+    tab1 = _mm_xor_ps(tab1, tab0);
+
+    __m128i result = _mm_shuffle_epi8(_mm_castps_si128(tab0), idx);
+    idx = _mm_sub_epi8(idx, _mm_set1_epi8(16));
+
+    result = _mm_xor_si128(result, _mm_shuffle_epi8(_mm_castps_si128(tab1), idx));
+
+    return _mm_castsi128_ps(result);
+}
+
+ICBC_FORCEINLINE VFloat vpermute4(VFloat tab0, VFloat tab1, VFloat tab2, VFloat tab3, __m128i idx) {
+
+    // @@ Precompute this:
+    tab3 = _mm_xor_ps(tab3, tab2);
+    tab2 = _mm_xor_ps(tab2, tab1);
+    tab1 = _mm_xor_ps(tab1, tab0);
+
+    __m128i result = _mm_shuffle_epi8(_mm_castps_si128(tab0), idx);
+    idx = _mm_sub_epi8(idx, _mm_set1_epi8(16));
+
+    result = _mm_xor_si128(result, _mm_shuffle_epi8(_mm_castps_si128(tab1), idx));
+    idx = _mm_sub_epi8(idx, _mm_set1_epi8(16));
+
+    result = _mm_xor_si128(result, _mm_shuffle_epi8(_mm_castps_si128(tab2), idx));
+    idx = _mm_sub_epi8(idx, _mm_set1_epi8(16));
+
+    result = _mm_xor_si128(result, _mm_shuffle_epi8(_mm_castps_si128(tab3), idx));
+
+    return _mm_castsi128_ps(result);
+}
+
+#endif
 
 
 #elif ICBC_SIMD == ICBC_AVX1 || ICBC_SIMD == ICBC_AVX2
@@ -1745,7 +1815,7 @@ static inline Vector3 firstEigenVector_PowerMethod(const float *__restrict matri
 
     Vector3 v = estimatePrincipalComponent(matrix);
 
-    const int NUM = 8;
+    const int NUM = 6;
     for (int i = 0; i < NUM; i++)
     {
         float x = v.x * matrix[0] + v.y * matrix[1] + v.z * matrix[2];
@@ -1865,13 +1935,13 @@ static ICBC_ALIGN_16 int s_threeClusterTotal[16];
 static ICBC_ALIGN_16 Combinations s_fourCluster[968 + 8];
 static ICBC_ALIGN_16 Combinations s_threeCluster[152 + 8];
 
-#if ICBC_USE_NEON_VTL
-static uint8 s_neon_vtl_index0_4[4 * 968];
-static uint8 s_neon_vtl_index1_4[4 * 968];
-static uint8 s_neon_vtl_index2_4[4 * 968];
+#if ICBC_USE_NEON_VTL || ICBC_USE_SSSE3_SHUFFLEB
+static uint8 s_byte_vtl_index0_4[4 * 968];
+static uint8 s_byte_vtl_index1_4[4 * 968];
+static uint8 s_byte_vtl_index2_4[4 * 968];
 
-static uint8 s_neon_vtl_index0_3[4 * 152];
-static uint8 s_neon_vtl_index1_3[4 * 152];
+static uint8 s_byte_vtl_index0_3[4 * 152];
+static uint8 s_byte_vtl_index1_3[4 * 152];
 #endif
 
 static float w1_3, w2_3;
@@ -1949,39 +2019,39 @@ static void init_cluster_tables() {
         s_threeCluster[152 + i] = s_threeCluster[152 - 1];
     }
 
-#if ICBC_USE_NEON_VTL
+#if ICBC_USE_NEON_VTL || ICBC_USE_SSSE3_SHUFFLEB
     for (int i = 0; i < 968; i++) {
         int c0 = (s_fourCluster[i].c0) - 1;
-        s_neon_vtl_index0_4[4 * i + 0] = c0 >= 0 ? uint8(c0 * 4 + 0) : 255;
-        s_neon_vtl_index0_4[4 * i + 1] = c0 >= 0 ? uint8(c0 * 4 + 1) : 255;
-        s_neon_vtl_index0_4[4 * i + 2] = c0 >= 0 ? uint8(c0 * 4 + 2) : 255;
-        s_neon_vtl_index0_4[4 * i + 3] = c0 >= 0 ? uint8(c0 * 4 + 3) : 255;
+        s_byte_vtl_index0_4[4 * i + 0] = c0 >= 0 ? uint8(c0 * 4 + 0) : 255;
+        s_byte_vtl_index0_4[4 * i + 1] = c0 >= 0 ? uint8(c0 * 4 + 1) : 255;
+        s_byte_vtl_index0_4[4 * i + 2] = c0 >= 0 ? uint8(c0 * 4 + 2) : 255;
+        s_byte_vtl_index0_4[4 * i + 3] = c0 >= 0 ? uint8(c0 * 4 + 3) : 255;
 
         int c1 = (s_fourCluster[i].c1) - 1;
-        s_neon_vtl_index1_4[4 * i + 0] = c1 >= 0 ? uint8(c1 * 4 + 0) : 255;
-        s_neon_vtl_index1_4[4 * i + 1] = c1 >= 0 ? uint8(c1 * 4 + 1) : 255;
-        s_neon_vtl_index1_4[4 * i + 2] = c1 >= 0 ? uint8(c1 * 4 + 2) : 255;
-        s_neon_vtl_index1_4[4 * i + 3] = c1 >= 0 ? uint8(c1 * 4 + 3) : 255;
+        s_byte_vtl_index1_4[4 * i + 0] = c1 >= 0 ? uint8(c1 * 4 + 0) : 255;
+        s_byte_vtl_index1_4[4 * i + 1] = c1 >= 0 ? uint8(c1 * 4 + 1) : 255;
+        s_byte_vtl_index1_4[4 * i + 2] = c1 >= 0 ? uint8(c1 * 4 + 2) : 255;
+        s_byte_vtl_index1_4[4 * i + 3] = c1 >= 0 ? uint8(c1 * 4 + 3) : 255;
 
         int c2 = (s_fourCluster[i].c2) - 1;
-        s_neon_vtl_index2_4[4 * i + 0] = c2 >= 0 ? uint8(c2 * 4 + 0) : 255;
-        s_neon_vtl_index2_4[4 * i + 1] = c2 >= 0 ? uint8(c2 * 4 + 1) : 255;
-        s_neon_vtl_index2_4[4 * i + 2] = c2 >= 0 ? uint8(c2 * 4 + 2) : 255;
-        s_neon_vtl_index2_4[4 * i + 3] = c2 >= 0 ? uint8(c2 * 4 + 3) : 255;
+        s_byte_vtl_index2_4[4 * i + 0] = c2 >= 0 ? uint8(c2 * 4 + 0) : 255;
+        s_byte_vtl_index2_4[4 * i + 1] = c2 >= 0 ? uint8(c2 * 4 + 1) : 255;
+        s_byte_vtl_index2_4[4 * i + 2] = c2 >= 0 ? uint8(c2 * 4 + 2) : 255;
+        s_byte_vtl_index2_4[4 * i + 3] = c2 >= 0 ? uint8(c2 * 4 + 3) : 255;
     }
 
     for (int i = 0; i < 152; i++) {
         int c0 = (s_threeCluster[i].c0) - 1;
-        s_neon_vtl_index0_3[4 * i + 0] = c0 >= 0 ? uint8(c0 * 4 + 0) : 255;
-        s_neon_vtl_index0_3[4 * i + 1] = c0 >= 0 ? uint8(c0 * 4 + 1) : 255;
-        s_neon_vtl_index0_3[4 * i + 2] = c0 >= 0 ? uint8(c0 * 4 + 2) : 255;
-        s_neon_vtl_index0_3[4 * i + 3] = c0 >= 0 ? uint8(c0 * 4 + 3) : 255;
+        s_byte_vtl_index0_3[4 * i + 0] = c0 >= 0 ? uint8(c0 * 4 + 0) : 255;
+        s_byte_vtl_index0_3[4 * i + 1] = c0 >= 0 ? uint8(c0 * 4 + 1) : 255;
+        s_byte_vtl_index0_3[4 * i + 2] = c0 >= 0 ? uint8(c0 * 4 + 2) : 255;
+        s_byte_vtl_index0_3[4 * i + 3] = c0 >= 0 ? uint8(c0 * 4 + 3) : 255;
 
         int c1 = (s_threeCluster[i].c1) - 1;
-        s_neon_vtl_index1_3[4 * i + 0] = c1 >= 0 ? uint8(c1 * 4 + 0) : 255;
-        s_neon_vtl_index1_3[4 * i + 1] = c1 >= 0 ? uint8(c1 * 4 + 1) : 255;
-        s_neon_vtl_index1_3[4 * i + 2] = c1 >= 0 ? uint8(c1 * 4 + 2) : 255;
-        s_neon_vtl_index1_3[4 * i + 3] = c1 >= 0 ? uint8(c1 * 4 + 3) : 255;
+        s_byte_vtl_index1_3[4 * i + 0] = c1 >= 0 ? uint8(c1 * 4 + 0) : 255;
+        s_byte_vtl_index1_3[4 * i + 1] = c1 >= 0 ? uint8(c1 * 4 + 1) : 255;
+        s_byte_vtl_index1_3[4 * i + 2] = c1 >= 0 ? uint8(c1 * 4 + 2) : 255;
+        s_byte_vtl_index1_3[4 * i + 3] = c1 >= 0 ? uint8(c1 * 4 + 3) : 255;
     }
 #endif
 }
@@ -2076,10 +2146,49 @@ static void cluster_fit_three(const SummedAreaTable & sat, int count, Vector3 me
             w1   = vpermute2if(c1 >= 0, wLo, wHi, c1);
         }
 
+#elif ICBC_USE_SSSE3_SHUFFLEB
+
+        if (count <= 8) {
+            VFloat rsat[2] = { vload(sat.r), vload(sat.r+4) };
+            VFloat gsat[2] = { vload(sat.g), vload(sat.g+4) };
+            VFloat bsat[2] = { vload(sat.b), vload(sat.b+4) };
+            VFloat wsat[2] = { vload(sat.w), vload(sat.w+4) };
+
+            __m128i idx0 = (__m128i &)s_byte_vtl_index0_3[4*i];
+            x0.x = vpermute2(rsat[0], rsat[1], idx0);
+            x0.y = vpermute2(gsat[0], gsat[1], idx0);
+            x0.z = vpermute2(bsat[0], bsat[1], idx0);
+            w0   = vpermute2(wsat[0], wsat[1], idx0);
+
+            __m128i idx1 = (__m128i &)s_byte_vtl_index1_3[4*i];
+            x1.x = vpermute2(rsat[0], rsat[1], idx1);
+            x1.y = vpermute2(gsat[0], gsat[1], idx1);
+            x1.z = vpermute2(bsat[0], bsat[1], idx1);
+            w1   = vpermute2(wsat[0], wsat[1], idx1);
+        }
+        else {
+            VFloat rsat[4] = { vload(sat.r), vload(sat.r+4), vload(sat.r+8), vload(sat.r+12) };
+            VFloat gsat[4] = { vload(sat.g), vload(sat.g+4), vload(sat.g+8), vload(sat.g+12) };
+            VFloat bsat[4] = { vload(sat.b), vload(sat.b+4), vload(sat.b+8), vload(sat.b+12) };
+            VFloat wsat[4] = { vload(sat.w), vload(sat.w+4), vload(sat.w+8), vload(sat.w+12) };
+
+            __m128i idx0 = (__m128i &)s_byte_vtl_index0_3[4*i];
+            x0.x = vpermute4(rsat[0], rsat[1], rsat[2], rsat[3], idx0);
+            x0.y = vpermute4(gsat[0], gsat[1], gsat[2], gsat[3], idx0);
+            x0.z = vpermute4(bsat[0], bsat[1], bsat[2], bsat[3], idx0);
+            w0   = vpermute4(wsat[0], wsat[1], wsat[2], wsat[3], idx0);
+
+            __m128i idx1 = (__m128i &)s_byte_vtl_index1_3[4*i];
+            x1.x = vpermute4(rsat[0], rsat[1], rsat[2], rsat[3], idx1);
+            x1.y = vpermute4(gsat[0], gsat[1], gsat[2], gsat[3], idx1);
+            x1.z = vpermute4(bsat[0], bsat[1], bsat[2], bsat[3], idx1);
+            w1   = vpermute4(wsat[0], wsat[1], wsat[2], wsat[3], idx1);
+        }
+
 #elif ICBC_USE_NEON_VTL
 
-        uint8x16_t idx0 = (uint8x16_t &)s_neon_vtl_index0_3[4*i];
-        uint8x16_t idx1 = (uint8x16_t &)s_neon_vtl_index1_3[4*i];
+        uint8x16_t idx0 = (uint8x16_t &)s_byte_vtl_index0_3[4*i];
+        uint8x16_t idx1 = (uint8x16_t &)s_byte_vtl_index1_3[4*i];
 
         /*if (count <= 4) {
             uint8x16_t rsat1 = (uint8x16_t&)sat.r;
@@ -2347,6 +2456,57 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
             w2   = vpermute2if(c2 >= 0, wLo, wHi, c2);
         }
 
+#elif ICBC_USE_SSSE3_SHUFFLEB
+
+        if (count <= 8) {
+            VFloat rsat[2] = { vload(sat.r), vload(sat.r+4) };
+            VFloat gsat[2] = { vload(sat.g), vload(sat.g+4) };
+            VFloat bsat[2] = { vload(sat.b), vload(sat.b+4) };
+            VFloat wsat[2] = { vload(sat.w), vload(sat.w+4) };
+
+            __m128i idx0 = (__m128i &)s_byte_vtl_index0_4[4*i];
+            x0.x = vpermute2(rsat[0], rsat[1], idx0);
+            x0.y = vpermute2(gsat[0], gsat[1], idx0);
+            x0.z = vpermute2(bsat[0], bsat[1], idx0);
+            w0   = vpermute2(wsat[0], wsat[1], idx0);
+
+            __m128i idx1 = (__m128i &)s_byte_vtl_index1_4[4*i];
+            x1.x = vpermute2(rsat[0], rsat[1], idx1);
+            x1.y = vpermute2(gsat[0], gsat[1], idx1);
+            x1.z = vpermute2(bsat[0], bsat[1], idx1);
+            w1   = vpermute2(wsat[0], wsat[1], idx1);
+
+            __m128i idx2 = (__m128i &)s_byte_vtl_index2_4[4*i];
+            x2.x = vpermute2(rsat[0], rsat[1], idx2);
+            x2.y = vpermute2(gsat[0], gsat[1], idx2);
+            x2.z = vpermute2(bsat[0], bsat[1], idx2);
+            w2   = vpermute2(wsat[0], wsat[1], idx2);
+        }
+        else {
+            VFloat rsat[4] = { vload(sat.r), vload(sat.r+4), vload(sat.r+8), vload(sat.r+12) };
+            VFloat gsat[4] = { vload(sat.g), vload(sat.g+4), vload(sat.g+8), vload(sat.g+12) };
+            VFloat bsat[4] = { vload(sat.b), vload(sat.b+4), vload(sat.b+8), vload(sat.b+12) };
+            VFloat wsat[4] = { vload(sat.w), vload(sat.w+4), vload(sat.w+8), vload(sat.w+12) };
+
+            __m128i idx0 = (__m128i &)s_byte_vtl_index0_4[4*i];
+            x0.x = vpermute4(rsat[0], rsat[1], rsat[2], rsat[3], idx0);
+            x0.y = vpermute4(gsat[0], gsat[1], gsat[2], gsat[3], idx0);
+            x0.z = vpermute4(bsat[0], bsat[1], bsat[2], bsat[3], idx0);
+            w0   = vpermute4(wsat[0], wsat[1], wsat[2], wsat[3], idx0);
+
+            __m128i idx1 = (__m128i &)s_byte_vtl_index1_4[4*i];
+            x1.x = vpermute4(rsat[0], rsat[1], rsat[2], rsat[3], idx1);
+            x1.y = vpermute4(gsat[0], gsat[1], gsat[2], gsat[3], idx1);
+            x1.z = vpermute4(bsat[0], bsat[1], bsat[2], bsat[3], idx1);
+            w1   = vpermute4(wsat[0], wsat[1], wsat[2], wsat[3], idx1);
+
+            __m128i idx2 = (__m128i &)s_byte_vtl_index2_4[4*i];
+            x2.x = vpermute4(rsat[0], rsat[1], rsat[2], rsat[3], idx2);
+            x2.y = vpermute4(gsat[0], gsat[1], gsat[2], gsat[3], idx2);
+            x2.z = vpermute4(bsat[0], bsat[1], bsat[2], bsat[3], idx2);
+            w2   = vpermute4(wsat[0], wsat[1], wsat[2], wsat[3], idx2);
+        }
+
 #elif ICBC_USE_NEON_VTL
 
         /*
@@ -2383,9 +2543,9 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         */
 
         // Loading the precomputed byte indices is faster than computing them on the fly.
-        uint8x16_t idx0 = (uint8x16_t &)s_neon_vtl_index0_4[4*i];
-        uint8x16_t idx1 = (uint8x16_t &)s_neon_vtl_index1_4[4*i];
-        uint8x16_t idx2 = (uint8x16_t &)s_neon_vtl_index2_4[4*i];
+        uint8x16_t idx0 = (uint8x16_t &)s_byte_vtl_index0_4[4*i];
+        uint8x16_t idx1 = (uint8x16_t &)s_byte_vtl_index1_4[4*i];
+        uint8x16_t idx2 = (uint8x16_t &)s_byte_vtl_index2_4[4*i];
 
         /*if (count <= 4) {
             uint8x16_t rsat1 = (uint8x16_t&)sat.r;
@@ -2706,6 +2866,15 @@ inline void evaluate_palette(Color16 c0, Color16 c1, Color32 palette[4], Decoder
     else if (decoder == Decoder_Intel)    evaluate_palette_intel(c0, c1, palette);
 }
 
+inline void evaluate_palette4(Color16 c0, Color16 c1, Color32 palette[4], Decoder decoder = s_decoder) {
+    palette[0] = bitexpand_color16_to_color32(c0);
+    palette[1] = bitexpand_color16_to_color32(c1);
+
+    if (decoder == Decoder_D3D10)         evaluate_palette4_d3d10(palette);
+    else if (decoder == Decoder_NVIDIA)   evaluate_palette4_nv(c0, c1, palette);
+    else if (decoder == Decoder_AMD)      evaluate_palette4_amd(palette);
+}
+
 static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
     Color32 palette32[4];
     evaluate_palette(c0, c1, palette32);
@@ -2715,8 +2884,20 @@ static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
     }
 }
 
-static void decode_dxt1(const BlockDXT1 * block, unsigned char rgba_block[16 * 4], Decoder decoder)
-{
+static void evaluate_palette(uint8 alpha0, uint8  alpha1, uint8 alpha_palette[8], Decoder decoder) {
+    // @@ 
+    alpha_palette[0] = alpha0;
+    alpha_palette[1] = alpha1;
+    if (alpha0 > alpha1) {
+        // @@ 
+    }
+    else {
+        // @@
+    }
+}
+
+
+static void decode_bc1(const BlockBC1 * block, unsigned char rgba_block[16 * 4], Decoder decoder) {
     Color32 palette[4];
     evaluate_palette(block->col0, block->col1, palette, decoder);
 
@@ -2727,6 +2908,26 @@ static void decode_dxt1(const BlockDXT1 * block, unsigned char rgba_block[16 * 4
         rgba_block[4 * i + 1] = c.g;
         rgba_block[4 * i + 2] = c.b;
         rgba_block[4 * i + 3] = c.a;
+    }
+}
+ 
+static void decode_bc3(const BlockBC3 * block, unsigned char rgba_block[16 * 4], Decoder decoder) {
+    Color32 rgb_palette[4];
+    evaluate_palette4(block->rgb.col0, block->rgb.col1, rgb_palette, decoder);
+
+    uint8 alpha_palette[8];
+    evaluate_palette(block->alpha.alpha0, block->alpha.alpha1, alpha_palette, decoder);
+
+    for (int i = 0; i < 16; i++) {
+        int rgb_index = (block->rgb.indices >> (2 * i)) & 3;
+        Color32 c = rgb_palette[rgb_index];
+        rgba_block[4 * i + 0] = c.r;
+        rgba_block[4 * i + 1] = c.g;
+        rgba_block[4 * i + 2] = c.b;
+
+        int alpha_index = 0; // @@
+        uint8 alpha = alpha_palette[alpha_index];
+        rgba_block[4 * i + 3] = alpha;
     }
 }
 
@@ -2759,7 +2960,7 @@ static int evaluate_mse(const Color32 palette[4], const Color32 & c) {
 }
 
 // Returns MSE error in [0-255] range.
-static int evaluate_mse(const BlockDXT1 * output, Color32 color, int index) {
+static int evaluate_mse(const BlockBC1 * output, Color32 color, int index) {
     Color32 palette[4];
     evaluate_palette(output->col0, output->col1, palette);
 
@@ -2787,7 +2988,7 @@ static float evaluate_palette_error(Color32 palette[4], const Color32 * colors, 
     return total;
 }
 
-static float evaluate_mse(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, const BlockDXT1 * output) {
+static float evaluate_mse(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, const BlockBC1 * output) {
     Color32 palette[4];
     evaluate_palette(output->col0, output->col1, palette);
 
@@ -2811,7 +3012,7 @@ static float evaluate_mse(const Vector4 input_colors[16], const float input_weig
     return error;
 }
 
-float evaluate_dxt1_error(const uint8 rgba_block[16*4], const BlockDXT1 * block, Decoder decoder) {
+float evaluate_bc1_error(const uint8 rgba_block[16*4], const BlockBC1 * block, Decoder decoder) {
     Color32 palette[4];
     evaluate_palette(block->col0, block->col1, palette, decoder);
 
@@ -2828,6 +3029,32 @@ float evaluate_dxt1_error(const uint8 rgba_block[16*4], const BlockDXT1 * block,
     }
     return error;
 }
+
+float evaluate_bc3_error(const uint8 rgba_block[16*4], const BlockBC3 * block, bool alpha_blend, Decoder decoder) {
+    Color32 rgb_palette[4];
+    evaluate_palette4(block->rgb.col0, block->rgb.col1, rgb_palette, decoder);
+
+    uint8 alpha_palette[8];
+    evaluate_palette(block->alpha.alpha0, block->alpha.alpha1, alpha_palette, decoder);
+
+    // evaluate error for each index.
+    float error = 0.0f;
+    for (int i = 0; i < 16; i++) {
+        Color32 c;
+        c.r = rgba_block[4 * i + 0];
+        c.g = rgba_block[4 * i + 1];
+        c.b = rgba_block[4 * i + 2];
+        c.a = rgba_block[4 * i + 3];
+
+        int rgb_index = (block->rgb.indices >> (2 * i)) & 3;
+        int alpha_index = 0; // @@ 
+
+        error += (alpha_blend ? (c.a * 1.0f/255.0f) : 1.0f) * evaluate_mse(rgb_palette[rgb_index], c);
+        error += square(int(alpha_palette[alpha_index]) - c.a);
+    }
+    return error;
+}
+
 
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2993,7 +3220,7 @@ static uint compute_indices(const Vector4 input_colors[16], const Vector3 & colo
 }
 
 
-static float output_block3(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool allow_transparent_black, const Vector3 & v0, const Vector3 & v1, BlockDXT1 * block)
+static float output_block3(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool allow_transparent_black, const Vector3 & v0, const Vector3 & v1, BlockBC1 * block)
 {
     Color16 color0 = vector3_to_color16(v0);
     Color16 color1 = vector3_to_color16(v1);
@@ -3012,7 +3239,7 @@ static float output_block3(const Vector4 input_colors[16], const float input_wei
     return evaluate_mse(input_colors, input_weights, color_weights, palette, block->indices);
 }
 
-static float output_block4(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, const Vector3 & v0, const Vector3 & v1, BlockDXT1 * block)
+static float output_block4(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, const Vector3 & v0, const Vector3 & v1, BlockBC1 * block)
 {
     Color16 color0 = vector3_to_color16(v0);
     Color16 color1 = vector3_to_color16(v1);
@@ -3066,83 +3293,6 @@ static bool optimize_end_points4(uint indices, const Vector4 * colors, /*const f
 
     return true;
 }
-
-// Least squares optimization with custom factors.
-// This allows us passing the standard [1, 0, 2/3 1/3] weights by default, but also use alternative mappings when the number of clusters is not 4.
-static bool optimize_end_points4(uint indices, const Vector3 * colors, int count, float factors[4], Vector3 * a, Vector3 * b)
-{
-    float alpha2_sum = 0.0f;
-    float beta2_sum = 0.0f;
-    float alphabeta_sum = 0.0f;
-    Vector3 alphax_sum = { 0,0,0 };
-    Vector3 betax_sum = { 0,0,0 };
-
-    for (int i = 0; i < count; i++)
-    {
-        const uint idx = (indices >> (2 * i)) & 3;
-        float alpha = factors[idx];
-        float beta = 1 - alpha;
-
-        alpha2_sum += alpha * alpha;
-        beta2_sum += beta * beta;
-        alphabeta_sum += alpha * beta;
-        alphax_sum += alpha * colors[i];
-        betax_sum += beta * colors[i];
-    }
-
-    float denom = alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum;
-    if (equal(denom, 0.0f)) return false;
-
-    float factor = 1.0f / denom;
-
-    *a = saturate((alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor);
-    *b = saturate((betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor);
-
-    return true;
-}
-
-static bool optimize_end_points4(uint indices, const Vector3 * colors, int count, Vector3 * a, Vector3 * b)
-{
-    float factors[4] = { 1, 0, 2.f / 3, 1.f / 3 };
-    return optimize_end_points4(indices, colors, count, factors, a, b);
-}
-
-
-// Least squares fitting of color end points for the given indices. @@ This does not support black/transparent index. @@ Take weights into account.
-static bool optimize_end_points3(uint indices, const Vector3 * colors, /*const float * weights,*/ int count, Vector3 * a, Vector3 * b)
-{
-    float alpha2_sum = 0.0f;
-    float beta2_sum = 0.0f;
-    float alphabeta_sum = 0.0f;
-    Vector3 alphax_sum = { 0,0,0 };
-    Vector3 betax_sum = { 0,0,0 };
-
-    for (int i = 0; i < count; i++)
-    {
-        const uint bits = indices >> (2 * i);
-
-        float beta = float(bits & 1);
-        if (bits & 2) beta = 0.5f;
-        float alpha = 1.0f - beta;
-
-        alpha2_sum += alpha * alpha;
-        beta2_sum += beta * beta;
-        alphabeta_sum += alpha * beta;
-        alphax_sum += alpha * colors[i];
-        betax_sum += beta * colors[i];
-    }
-
-    float denom = alpha2_sum * beta2_sum - alphabeta_sum * alphabeta_sum;
-    if (equal(denom, 0.0f)) return false;
-
-    float factor = 1.0f / denom;
-
-    *a = saturate((alphax_sum * beta2_sum - betax_sum * alphabeta_sum) * factor);
-    *b = saturate((betax_sum * alpha2_sum - alphax_sum * alphabeta_sum) * factor);
-
-    return true;
-}
-
 
 // find minimum and maximum colors based on bounding box in color space
 inline static void fit_colors_bbox(const Vector3 * colors, int count, Vector3 * __restrict c0, Vector3 * __restrict c1)
@@ -3208,12 +3358,6 @@ inline static void inset_bbox(Vector3 * __restrict c0, Vector3 * __restrict c1)
 // https://github.com/nothings/stb/blob/master/stb_dxt.h
 static uint8 s_match5[256][2];
 static uint8 s_match6[256][2];
-
-static inline int Lerp13(int a, int b)
-{
-    // replace "/ 3" by "* 0xaaab) >> 17" if your compiler sucks or you really need every ounce of speed.
-    return (a * 2 + b) / 3;
-}
 
 static void PrepareOptTable5(uint8 * table, Decoder decoder)
 {
@@ -3345,7 +3489,7 @@ static void init_decoder_weights(Decoder decoder)
 
 // Single color compressor, based on:
 // https://mollyrocket.com/forums/viewtopic.php?t=392
-static void compress_dxt1_single_color_optimal(Color32 c, BlockDXT1 * output)
+static void compress_dxt1_single_color_optimal(Color32 c, BlockBC1 * output)
 {
     output->col0.r = s_match5[c.r][0];
     output->col0.g = s_match6[c.g][0];
@@ -3363,7 +3507,7 @@ static void compress_dxt1_single_color_optimal(Color32 c, BlockDXT1 * output)
 }
 
 
-static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, bool try_transparent_black, bool allow_transparent_black, BlockDXT1 * output)
+static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const float input_weights[16], const Vector3 * colors, const float * weights, int count, const Vector3 & color_weights, bool three_color_mode, bool try_transparent_black, bool allow_transparent_black, BlockBC1 * output)
 {
     Vector3 metric_sqr = color_weights * color_weights;
 
@@ -3387,7 +3531,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
 
         cluster_fit_three(sat, sat_count, metric_sqr, &start, &end);
 
-        BlockDXT1 three_color_block;
+        BlockBC1 three_color_block;
         float three_color_error = output_block3(input_colors, input_weights, color_weights, allow_transparent_black, start, end, &three_color_block);
 
         if (three_color_error < best_error) {
@@ -3400,7 +3544,7 @@ static float compress_dxt1_cluster_fit(const Vector4 input_colors[16], const flo
 }
 
 
-static float refine_endpoints(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, float input_error, BlockDXT1 * output) {
+static float refine_endpoints(const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, float input_error, BlockBC1 * output) {
     // TODO:
     // - Optimize palette evaluation when updating only one channel.
     // - try all diagonals.
@@ -3441,7 +3585,7 @@ static float refine_endpoints(const Vector4 input_colors[16], const float input_
 
     int lastImprovement = 0;
     for (int i = 0; i < 256; i++) {
-        BlockDXT1 refined = *output;
+        BlockBC1 refined = *output;
         int8 delta[3] = { deltas[i % 16][0], deltas[i % 16][1], deltas[i % 16][2] };
 
         if ((i / 16) & 1) {
@@ -3556,7 +3700,7 @@ static Options setup_options(Quality level, bool enable_three_color_mode, bool e
 }
 
 
-static float compress_dxt1(Quality level, const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, bool three_color_black, BlockDXT1 * output)
+static float compress_bc1(Quality level, const Vector4 input_colors[16], const float input_weights[16], const Vector3 & color_weights, bool three_color_mode, bool three_color_black, BlockBC1 * output)
 {
     Options opt = setup_options(level, three_color_mode, three_color_black);
 
@@ -3600,7 +3744,7 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
 
         // Refine color for the selected indices.
         if (opt.least_squares_fit && optimize_end_points4(output->indices, input_colors, 16, &c0, &c1)) {
-            BlockDXT1 optimized_block;
+            BlockBC1 optimized_block;
             float optimized_error = output_block4(input_colors, input_weights, color_weights, c0, c1, &optimized_block);
 
             if (optimized_error < error) {
@@ -3617,7 +3761,7 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
         bool use_three_color_mode = opt.cluster_fit_3 || (use_three_color_black && opt.cluster_fit_3_black_only);
 
         // Try cluster fit.
-        BlockDXT1 cluster_fit_output;
+        BlockBC1 cluster_fit_output;
         float cluster_fit_error = compress_dxt1_cluster_fit(input_colors, input_weights, colors, weights, count, color_weights, use_three_color_mode, use_three_color_black, three_color_black, &cluster_fit_output);
         if (cluster_fit_error < error) {
             *output = cluster_fit_output;
@@ -3635,23 +3779,46 @@ static float compress_dxt1(Quality level, const Vector4 input_colors[16], const 
 
 // Public API
 
-void init_dxt1(Decoder decoder) {
+void init(Decoder decoder) {
     s_decoder = decoder;
     init_single_color_tables(decoder);
     init_cluster_tables();
     init_decoder_weights(decoder);
 }
 
-void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
-    decode_dxt1((const BlockDXT1 *)block, rgba_block, decoder);
+void decode_bc1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
+    decode_bc1((const BlockBC1 *)block, rgba_block, decoder);
 }
 
-float evaluate_dxt1_error(const unsigned char rgba_block[16 * 4], const void * dxt_block, Decoder decoder/*=Decoder_D3D10*/) {
-    return evaluate_dxt1_error(rgba_block, (const BlockDXT1 *)dxt_block, decoder);
+void decode_bc3(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
+    decode_bc3((const BlockBC3 *)block, rgba_block, decoder);
 }
 
-float compress_dxt1(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool three_color_mode, bool three_color_black, void * output) {
-    return compress_dxt1(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, three_color_mode, three_color_black, (BlockDXT1*)output);
+// void decode_bc4(const void * block, bool snorm, float rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
+//     decode_bc4((const BlockBC4 *)block, snorm, rgba_block, decoder);
+// }
+
+// void decode_bc5(const void * block, bool snorm, float rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {
+//     decode_bc5((const BlockBC5 *)block, snorm, rgba_block, decoder);
+// }
+
+
+float evaluate_bc1_error(const unsigned char rgba_block[16 * 4], const void * dxt_block, Decoder decoder/*=Decoder_D3D10*/) {
+    return evaluate_bc1_error(rgba_block, (const BlockBC1 *)dxt_block, decoder);
+}
+
+float evaluate_bc3_error(const unsigned char rgba_block[16 * 4], const void * dxt_block, bool alpha_blend, Decoder decoder/*=Decoder_D3D10*/) {
+    return evaluate_bc3_error(rgba_block, (const BlockBC3 *)dxt_block, alpha_blend, decoder);
+}
+
+
+float compress_bc1(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool three_color_mode, bool three_color_black, void * output) {
+    return compress_bc1(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, three_color_mode, three_color_black, (BlockBC1*)output);
+}
+
+float compress_bc3(Quality level, const float * input_colors, const float * input_weights, const float rgb[3], bool six_alpha_mode, void * output) {
+    //return compress_bc3(level, (Vector4*)input_colors, input_weights, { rgb[0], rgb[1], rgb[2] }, six_alpha_mode, (BlockBC3*)output);
+    return 0.0f; // @@ 
 }
 
 } // icbc

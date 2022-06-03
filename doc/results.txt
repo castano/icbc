@@ -63,3 +63,7 @@ Apple M1 Pro - clang 13.0 - 2022/01/11
 Apple M1 Pro - clang 13.0 - 2022/05/21
     Neon:   RMSE = 6.916    PSNR = 31.333   TIME = 0.261387 (0.253627)
 
+Sky Lake - vc2019/x64 - 2020/05/30
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 0.552568 (0.542942) 
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 0.487131 (0.480239) // with ICBC_USE_SSSE3_SHUFFLEB = 1
+
