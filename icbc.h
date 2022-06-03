@@ -2873,6 +2873,7 @@ inline void evaluate_palette4(Color16 c0, Color16 c1, Color32 palette[4], Decode
     if (decoder == Decoder_D3D10)         evaluate_palette4_d3d10(palette);
     else if (decoder == Decoder_NVIDIA)   evaluate_palette4_nv(c0, c1, palette);
     else if (decoder == Decoder_AMD)      evaluate_palette4_amd(palette);
+    else if (decoder == Decoder_Intel)    evaluate_palette4_intel(palette);
 }
 
 static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
@@ -3380,6 +3381,9 @@ static void PrepareOptTable5(uint8 * table, Decoder decoder)
                 int nv_r = ((2 * mx + mn) * 22) / 8;
                 int nv_err = abs(nv_r - i);
 
+                int intel_r = (171 * maxe + 85 * mine + 128) >> 8;
+                int intel_err = abs(intel_r - i);
+
                 if (decoder == Decoder_D3D10) {
                     // DX10 spec says that interpolation must be within 3% of "correct" result,
                     // add this as error term. (normally we'd expect a random distribution of
@@ -3389,10 +3393,13 @@ static void PrepareOptTable5(uint8 * table, Decoder decoder)
                     err = abs(r - i) * 100 + abs(mx - mn) * 3;
 
                     // Another approach is to consider the worst of AMD and NVIDIA errors.
-                    err = max(amd_err, nv_err);                    
+                    err = max(max(amd_err, nv_err), intel_err);
                 }
                 else if (decoder == Decoder_NVIDIA) {
                     err = nv_err;
+                }
+                else if (decoder == Decoder_Intel) {
+                    err = intel_err;
                 }
                 else /*if (decoder == Decoder_AMD)*/ {
                     err = amd_err;
@@ -3429,6 +3436,9 @@ static void PrepareOptTable6(uint8 * table, Decoder decoder)
                 int nv_g = (256 * mine + (maxe - mine) / 4 + 128 + (maxe - mine) * 80) / 256;
                 int nv_err = abs(nv_g - i);
 
+                int intel_g = (171 * maxe + 85 * mine + 128) >> 8;
+                int intel_err = abs(intel_g - i);
+
                 if (decoder == Decoder_D3D10) {
                     // DX10 spec says that interpolation must be within 3% of "correct" result,
                     // add this as error term. (normally we'd expect a random distribution of
@@ -3438,10 +3448,13 @@ static void PrepareOptTable6(uint8 * table, Decoder decoder)
                     err = abs(g - i) * 100 + abs(mx - mn) * 3;
 
                     // Another approach is to consider the worst of AMD and NVIDIA errors.
-                    err = max(amd_err, nv_err);
+                    err = max(max(amd_err, nv_err), intel_err);
                 }
                 else if (decoder == Decoder_NVIDIA) {
                     err = nv_err;
+                }
+                else if (decoder == Decoder_Intel) {
+                    err = intel_err;
                 }
                 else /*if (decoder == Decoder_AMD)*/ {
                     err = amd_err;
