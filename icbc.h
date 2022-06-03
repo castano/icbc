@@ -12,7 +12,8 @@ namespace icbc {
     enum Decoder {
         Decoder_D3D10 = 0,
         Decoder_NVIDIA = 1,
-        Decoder_AMD = 2
+        Decoder_AMD = 2,
+        Decoder_Intel = 3
     };
 
     void init_dxt1(Decoder decoder = Decoder_D3D10);
@@ -1873,6 +1874,10 @@ static uint8 s_neon_vtl_index0_3[4 * 152];
 static uint8 s_neon_vtl_index1_3[4 * 152];
 #endif
 
+static float w1_3, w2_3;
+static float w1_9, w4_9, w2_9;
+
+
 static void init_cluster_tables() {
 
     for (int t = 1, i = 0; t <= 16; t++) {
@@ -2509,6 +2514,15 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         w2 = w2 - w1;
         w1 = w1 - w0;
 
+#if 1
+        VFloat alpha2_sum = vmadd(w2, w1_9, vmadd(w1, w4_9, w0));
+        VFloat beta2_sum  = vmadd(w1, w1_9, vmadd(w2, w4_9, w3));
+
+        VFloat alphabeta_sum = (w1 + w2) * vbroadcast(w2_9);
+        VFloat factor = vrcp(vm2sub(alpha2_sum, beta2_sum, alphabeta_sum, alphabeta_sum));
+
+        VVector3 alphax_sum = vmadd(x2, w1_3, vmadd(x1, w2_3, x0));
+#else
         VFloat alpha2_sum = vmadd(w2, (1.0f / 9.0f), vmadd(w1, (4.0f / 9.0f), w0));
         VFloat beta2_sum  = vmadd(w1, (1.0f / 9.0f), vmadd(w2, (4.0f / 9.0f), w3));
 
@@ -2516,6 +2530,7 @@ static void cluster_fit_four(const SummedAreaTable & sat, int count, Vector3 met
         VFloat factor = vrcp(vm2sub(alpha2_sum, beta2_sum, alphabeta_sum, alphabeta_sum));
 
         VVector3 alphax_sum = vmadd(x2, (1.0f / 3.0f), vmadd(x1, (2.0f / 3.0f), x0));
+#endif
         VVector3 betax_sum = vbroadcast(r_sum, g_sum, b_sum) - alphax_sum;
 
         VVector3 a = vm2sub(alphax_sum, beta2_sum, betax_sum, alphabeta_sum) * factor;
@@ -2653,10 +2668,42 @@ static void evaluate_palette_amd(Color16 c0, Color16 c1, Color32 palette[4]) {
     }
 }
 
+// Intel
+inline void evaluate_palette4_intel(Color32 palette[4]) {
+    palette[2].r = uint8((171 * palette[0].r + 85 * palette[1].r + 128) >> 8);
+    palette[2].g = uint8((171 * palette[0].g + 85 * palette[1].g + 128) >> 8);
+    palette[2].b = uint8((171 * palette[0].b + 85 * palette[1].b + 128) >> 8);
+    palette[2].a = 0xFF;
+
+    palette[3].r = uint8((171 * palette[1].r + 85 * palette[0].r + 128) >> 8);
+    palette[3].g = uint8((171 * palette[1].g + 85 * palette[0].g + 128) >> 8);
+    palette[3].b = uint8((171 * palette[1].b + 85 * palette[0].b + 128) >> 8);
+    palette[3].a = 0xFF;
+}
+inline void evaluate_palette3_intel(Color32 palette[4]) {
+    palette[2].r = uint8((128 * palette[0].r + 128 * palette[1].r + 128) >> 8);
+    palette[2].g = uint8((128 * palette[0].g + 128 * palette[1].g + 128) >> 8);
+    palette[2].b = uint8((128 * palette[0].b + 128 * palette[1].b + 128) >> 8);
+    palette[2].a = 0xFF;
+    palette[3].u = 0;
+}
+static void evaluate_palette_intel(Color16 c0, Color16 c1, Color32 palette[4]) {
+    palette[0] = bitexpand_color16_to_color32(c0);
+    palette[1] = bitexpand_color16_to_color32(c1);
+
+    if (c0.u > c1.u) {
+        evaluate_palette4_intel(palette);
+    }
+    else {
+        evaluate_palette3_intel(palette);
+    }
+}
+
 inline void evaluate_palette(Color16 c0, Color16 c1, Color32 palette[4], Decoder decoder = s_decoder) {
     if (decoder == Decoder_D3D10)         evaluate_palette_d3d10(c0, c1, palette);
     else if (decoder == Decoder_NVIDIA)   evaluate_palette_nv(c0, c1, palette);
     else if (decoder == Decoder_AMD)      evaluate_palette_amd(c0, c1, palette);
+    else if (decoder == Decoder_Intel)    evaluate_palette_intel(c0, c1, palette);
 }
 
 static void evaluate_palette(Color16 c0, Color16 c1, Vector3 palette[4]) {
@@ -3274,6 +3321,28 @@ static void init_single_color_tables(Decoder decoder)
     PrepareOptTable6(&s_match6[0][0], decoder);
 }
 
+static void init_decoder_weights(Decoder decoder)
+{
+    w1_3 = 1.0f / 3; 
+    w2_3 = 2.0f / 3;
+
+    if (decoder == Decoder_NVIDIA) {
+        // @@ Choose weights that approximate better nvidia's decoder.
+    }
+    else if (decoder == Decoder_AMD) {
+        w1_3 = 21.0f / 64;
+        w2_3 = 43.0f / 64;
+    }
+    else if (decoder == Decoder_Intel) {
+        w1_3 = 85.0f / 256;
+        w2_3 = 171.0f / 256;
+    }
+
+    w1_9 = w1_3 * w1_3;
+    w4_9 = w2_3 * w2_3;
+    w2_9 = w1_3 * w2_3;
+}
+
 // Single color compressor, based on:
 // https://mollyrocket.com/forums/viewtopic.php?t=392
 static void compress_dxt1_single_color_optimal(Color32 c, BlockDXT1 * output)
@@ -3570,6 +3639,7 @@ void init_dxt1(Decoder decoder) {
     s_decoder = decoder;
     init_single_color_tables(decoder);
     init_cluster_tables();
+    init_decoder_weights(decoder);
 }
 
 void decode_dxt1(const void * block, unsigned char rgba_block[16 * 4], Decoder decoder/*=Decoder_D3D10*/) {

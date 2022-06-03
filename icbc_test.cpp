@@ -391,7 +391,7 @@ bool encode_image(const char * input_filename) {
         estimate.add(timer.stop());
     }
 
-    float mse = evaluate_dxt1_mse(rgba_block_data, block_data, block_count);
+    float mse = evaluate_dxt1_mse(rgba_block_data, block_data, block_count, decoder);
 
     char output_filename[1024];
     if (output_dds) {
@@ -471,6 +471,7 @@ int main(int argc, char * argv[]) {
             if (i+1 < argc) {
                 if (strcmp(argv[i+1], "nv") == 0) decoder = icbc::Decoder_NVIDIA;
                 else if (strcmp(argv[i+1], "amd") == 0) decoder = icbc::Decoder_AMD;
+                else if (strcmp(argv[i+1], "intel") == 0) decoder = icbc::Decoder_Intel;
                 else if (strcmp(argv[i+1], "d3d10") == 0) decoder = icbc::Decoder_D3D10;
                 else {
                     printf("Unrecognized decoder argument: %s\n", argv[i+1]);
