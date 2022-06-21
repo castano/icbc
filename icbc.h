@@ -1645,6 +1645,7 @@ static Color32 bitexpand_color16_to_color32(Color16 c16) {
     c32.u = ((c16.u << 3) & 0xf8) | ((c16.u << 5) & 0xfc00) | ((c16.u << 8) & 0xf80000);
     c32.u |= (c32.u >> 5) & 0x070007;
     c32.u |= (c32.u >> 6) & 0x000300;
+    c32.u |= 0xff000000;	
 
     return c32;
 }
