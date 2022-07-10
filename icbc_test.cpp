@@ -395,8 +395,8 @@ bool encode_image(const char * input_filename) {
         //for (int b = 0; b < block_count; b++) {
         //ic::pfor(block_count, 32, [=](int b) {
         ic_pfor(b, block_count, 32) {
-            float input_colors[16 * 4];
-            float input_weights[16];
+            ICBC_ALIGN float input_colors[16 * 4];
+            ICBC_ALIGN float input_weights[16];
             for (int j = 0; j < 16; j++) {
                 input_colors[4 * j + 0] = rgba_block_data[b * 4 * 4 * 4 + j * 4 + 0] / 255.0f;
                 input_colors[4 * j + 1] = rgba_block_data[b * 4 * 4 * 4 + j * 4 + 1] / 255.0f;

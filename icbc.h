@@ -370,11 +370,11 @@ inline bool equal(Vector3 a, Vector3 b, float epsilon) {
 ///////////////////////////////////////////////////////////////////////////////////////////////////
 // SIMD
 
-#ifndef ICBC_ALIGN_16
+#ifndef ICBC_ALIGN
 #if __GNUC__
-#   define ICBC_ALIGN_16 __attribute__ ((__aligned__ (16)))
+#   define ICBC_ALIGN __attribute__ ((__aligned__ (icbc::VEC_SIZE*4)))
 #else // _MSC_VER
-#   define ICBC_ALIGN_16 __declspec(align(16))
+#   define ICBC_ALIGN __declspec(align(icbc::VEC_SIZE*4))
 #endif
 #endif
 
@@ -860,6 +860,7 @@ ICBC_FORCEINLINE VInt operator& (VInt A, int b) { return _mm256_and_si256(A, _mm
 ICBC_FORCEINLINE VInt operator>> (VInt A, int b) { return _mm256_srli_epi32(A, b); }
 
 ICBC_FORCEINLINE VMask operator> (VInt A, int b) { return _mm256_castsi256_ps(_mm256_cmpgt_epi32(A, _mm256_set1_epi32(b))); }
+ICBC_FORCEINLINE VMask operator>= (VInt A, int b) { return _mm256_castsi256_ps(_mm256_cmpgt_epi32(A, _mm256_set1_epi32(b-1))); }
 ICBC_FORCEINLINE VMask operator== (VInt A, int b) { return _mm256_castsi256_ps(_mm256_cmpeq_epi32(A, _mm256_set1_epi32(b))); }
 
 // mask ? v[idx] : 0
@@ -1165,7 +1166,7 @@ ICBC_FORCEINLINE VFloat vtruncate(VFloat a) {
 }
 
 ICBC_FORCEINLINE VFloat lane_id() {
-    ICBC_ALIGN_16 float data[4] = { 0, 1, 2, 3 };
+    ICBC_ALIGN float data[4] = { 0, 1, 2, 3 };
 	return vld1q_f32(data);
 }
 
@@ -1844,10 +1845,10 @@ static Vector3 computePrincipalComponent_PowerMethod(int n, const Vector3 *__res
 // SAT
 
 struct SummedAreaTable {
-    ICBC_ALIGN_16 float r[16];
-    ICBC_ALIGN_16 float g[16];
-    ICBC_ALIGN_16 float b[16];
-    ICBC_ALIGN_16 float w[16];
+    ICBC_ALIGN float r[16];
+    ICBC_ALIGN float g[16];
+    ICBC_ALIGN float b[16];
+    ICBC_ALIGN float w[16];
 };
 
 int compute_sat(const Vector3 * colors, const float * weights, int count, SummedAreaTable * sat)
@@ -1930,10 +1931,10 @@ struct Combinations {
     uint8 c0, c1, c2, pad;
 };
 
-static ICBC_ALIGN_16 int s_fourClusterTotal[16];
-static ICBC_ALIGN_16 int s_threeClusterTotal[16];
-static ICBC_ALIGN_16 Combinations s_fourCluster[968 + 8];
-static ICBC_ALIGN_16 Combinations s_threeCluster[152 + 8];
+static ICBC_ALIGN int s_fourClusterTotal[16];
+static ICBC_ALIGN int s_threeClusterTotal[16];
+static ICBC_ALIGN Combinations s_fourCluster[968 + 8];
+static ICBC_ALIGN Combinations s_threeCluster[152 + 8];
 
 #if ICBC_USE_NEON_VTL || ICBC_USE_SSSE3_SHUFFLEB
 static uint8 s_byte_vtl_index0_4[4 * 968];
