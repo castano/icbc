@@ -4,8 +4,8 @@ Rasperry Pi - gcc 8.3 - 2020/05/14
 	Float: RMSE = 6.906	    PSNR = 31.346	TIME = 11.536309 (11.447170)
 
 Raspberry Pi - gcc 8.3 - 2020/05/30
-	Neon:  RMSE = 6.912	    PSNR = 31.339	TIME = 5.520404 (5.470292)
-	Float: RMSE = 6.912	    PSNR = 31.339	TIME = 10.290935 (10.265525)
+    Neon:  RMSE = 6.912	    PSNR = 31.339	TIME = 5.520404 (5.470292)
+    Float: RMSE = 6.912	    PSNR = 31.339	TIME = 10.290935 (10.265525)
 
 Raspberry Pi - Neon - gcc 8.3 - 2020/05/30
     q1:    RMSE = 7.394	    PSNR = 30.753	TIME = 0.330453 (0.318691)
@@ -45,7 +45,7 @@ Sky Lake - vc2019/x64 - 2020/05/31
     AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.271278 (0.265888)
 
 Raspberry Pi - gcc 8.3 - 2020/06/11
-	Neon:   RMSE = 6.916    PSNR = 31.333	TIME = 4.869383 (4.837136)
+    Neon:   RMSE = 6.916    PSNR = 31.333	TIME = 4.869383 (4.837136)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 9.983787 (9.971635)
 
 Sky Lake - vc2019/x64 - 2020/05/30
@@ -69,3 +69,9 @@ Sky Lake - vc2019/x64 - 2020/05/30
 
 GeForce RTX 2070 Super - CUDA 7.5 - 2020/12/14
     CUDA:   RMSE = 7.034    PSNR = 31.186   TIME = 0.050811 (0.044714)
+
+Chromebook Intel Core i7-7Y75 - 2 cores / 4 threads - gcc 10 - 2022/07/10
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 1.872980 (1.774476)
+    AVX1:   RMSE = 6.916    PSNR = 31.333   TIME = 5.740920 (5.489162)
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 3.693144 (3.534980)
+
