@@ -74,4 +74,5 @@ Chromebook Intel Core i7-7Y75 - 2 cores / 4 threads - gcc 10 - 2022/07/10
     AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 1.872980 (1.774476)
     AVX1:   RMSE = 6.916    PSNR = 31.333   TIME = 5.740920 (5.489162)
     SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 3.693144 (3.534980)
-
+    SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 6.832403 (6.531178)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 9.765961 (9.364170)
