@@ -1128,13 +1128,13 @@ ICBC_FORCEINLINE VFloat operator*(VFloat a, VFloat b) {
 }
 
 ICBC_FORCEINLINE VFloat vrcp(VFloat a) {
-//#if ICBC_USE_RCP
-    VFloat rcp = vrecpeq_f32(a);
-    //return rcp;
-    return vmulq_f32(vrecpsq_f32(a, rcp), rcp);
-//#else
-//    return vdiv_f32(vbroadcast(1.0f), a);    // @@ ARMv8 only?
-//#endif
+#if ICBC_USE_RCP
+    return vrecpeq_f32(a);
+#else
+    //VFloat rcp = vrecpeq_f32(a);
+    //return vmulq_f32(vrecpsq_f32(a, rcp), rcp);
+    return vdivq_f32(vbroadcast(1.0f), a);
+#endif
 }
 
 // a*b+c
@@ -1204,9 +1204,10 @@ ICBC_FORCEINLINE uint mask(VMask b) {
 }
 
 ICBC_FORCEINLINE int reduce_min_index(VFloat v) {
-    float32x2_t m2 = vpmin_f32(vget_low_u32(v), vget_high_u32(v));
-    float32x2_t m1 = vpmin_f32(m2, m2);
-    VFloat vmin = vdupq_lane_f32(m1, 0);
+    // float32x2_t m2 = vpmin_f32(vget_low_u32(v), vget_high_u32(v));
+    // float32x2_t m1 = vpmin_f32(m2, m2);
+    // VFloat vmin = vdupq_lane_f32(m1, 0);
+    VFloat vmin = vdupq_n_f32(vminvq_f32(v));
     return ctz(mask(v <= vmin));
 }
 
