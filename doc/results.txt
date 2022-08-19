@@ -56,11 +56,11 @@ Gulftown - vc2017/x64 - 2020/07/31
     SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 1.245808 (1.177381)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 2.440240 (2.320139)
 
-Apple M1 Pro - clang 13.0 - 2022/01/11
+Apple M1 Pro - 10 threads - clang 13.0 - 2022/01/11
     Neon:   RMSE = 6.916    PSNR = 31.333   TIME = 0.290521 (0.285169)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 0.844785 (0.834892)
 
-Apple M1 Pro - clang 13.0 - 2022/05/21
+Apple M1 Pro - 10 threads - clang 13.0 - 2022/05/21
     Neon:   RMSE = 6.916    PSNR = 31.333   TIME = 0.261387 (0.253627) // with ICBC_USE_NEON_VTL = 1
 
 Sky Lake - vc2019/x64 - 2020/05/30
@@ -76,3 +76,6 @@ Chromebook Intel Core i7-7Y75 - 2 cores / 4 threads - gcc 10 - 2022/07/10
     SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 3.693144 (3.534980)
     SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 6.832403 (6.531178)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 9.765961 (9.364170)
+
+Tiger Lake - i7-1185G7 @ 3.00GHz - 4 cores / 8 threads - vc2017/x64 - 2022/11/16
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.324298 (0.307009)
