@@ -3361,7 +3361,7 @@ inline static void select_diagonal(const Vector3 * colors, int count, Vector3 * 
 inline static void inset_bbox(Vector3 * __restrict c0, Vector3 * __restrict c1)
 {
     float bias = (8.0f / 255.0f) / 16.0f;
-    Vector3 inset = (*c0 - *c1) / 16.0f - scalar_to_vector3(bias);
+    Vector3 inset = saturate((*c0 - *c1) / 16.0f - scalar_to_vector3(bias));
     *c0 = saturate(*c0 - inset);
     *c1 = saturate(*c1 + inset);
 }
