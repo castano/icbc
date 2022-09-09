@@ -1876,6 +1876,40 @@ int compute_sat(const Vector3 * colors, const float * weights, int count, Summed
         }
     }
 
+#if 0
+    u8 byte_order[16*4];
+    for (int i = 0; i < count; ++i)
+    {
+    }
+    
+    // @@ Load colors and weights.
+    VFloat table_r[16/VEC_SIZE];
+    VFloat table_g[16/VEC_SIZE];
+    VFloat table_b[16/VEC_SIZE];
+    VFloat table_w[16/VEC_SIZE];
+
+    VFloat sat_r[16/VEC_SIZE];
+    VFloat sat_g[16/VEC_SIZE];
+    VFloat sat_b[16/VEC_SIZE];
+    VFloat sat_w[16/VEC_SIZE];
+
+    for (int i = 0; i < 16; i += VEC_SIZE) {
+        VFloat w = table_lookup(table_w, order);
+        sat_r[i] = table_lookup(table_r, order) * w;
+        sat_g[i] = table_lookup(table_g, order) * w;
+        sat_b[i] = table_lookup(table_b, order) * w;
+        sat_w[i] = w;
+    }
+
+    // Somewhat brute force way to compute sum tables. Is it worth it?
+    for (int i = 0; i < 16; i += 1) {
+        float r = sat_r[i/VEC_SIZE][i%VEC_SIZE];
+
+        if (i > lane_id)
+            sat_r[i] += sat_r[lane_id];
+    }
+#endif
+
     float w = weights[order[0]];
     sat->r[0] = colors[order[0]].x * w;
     sat->g[0] = colors[order[0]].y * w;
@@ -1889,30 +1923,6 @@ int compute_sat(const Vector3 * colors, const float * weights, int count, Summed
         sat->b[i] = sat->b[i - 1] + colors[order[i]].z * w;
         sat->w[i] = sat->w[i - 1] + w;
     }
-
-    // Try incremental decimation:
-    /*if (count > 4)
-    {
-        float threshold = 1.0f / 4;
-
-        for (uint i = 1; i < count; ++i)
-        {
-            if (sat->r[i] - sat->r[i - 1] < threshold &&
-                sat->g[i] - sat->g[i - 1] < threshold &&
-                sat->b[i] - sat->b[i - 1] < threshold)
-            {
-                for (int j = i+1; j < count; j++) {
-                    sat->r[j - 1] = sat->r[j];
-                    sat->g[j - 1] = sat->g[j];
-                    sat->b[j - 1] = sat->b[j];
-                    sat->w[j - 1] = sat->w[j];
-                }
-                count -= 1;
-                i -= 1;
-                if (count == 4) break;
-            }
-        }
-    }*/
 
     for (int i = count; i < 16; i++) {
         sat->r[i] = FLT_MAX;
@@ -2975,7 +2985,7 @@ static float evaluate_palette_error(Color32 palette[4], const Color32 * colors, 
 
     float total = 0.0f;
     for (int i = 0; i < count; i++) {
-        total += weights[i] * evaluate_mse(palette, colors[i]);
+        total += weights[i] * float(evaluate_mse(palette, colors[i]));
     }
 
     return total;
@@ -2985,7 +2995,7 @@ static float evaluate_palette_error(Color32 palette[4], const Color32 * colors, 
 
     float total = 0.0f;
     for (int i = 0; i < count; i++) {
-        total += evaluate_mse(palette, colors[i]);
+        total += float(evaluate_mse(palette, colors[i]));
     }
 
     return total;
@@ -3028,7 +3038,7 @@ float evaluate_bc1_error(const uint8 rgba_block[16*4], const BlockBC1 * block, D
         c.g = rgba_block[4 * i + 1];
         c.b = rgba_block[4 * i + 2];
         c.a = 255;
-        error += evaluate_mse(palette[index], c);
+        error += float(evaluate_mse(palette[index], c));
     }
     return error;
 }
@@ -3052,8 +3062,8 @@ float evaluate_bc3_error(const uint8 rgba_block[16*4], const BlockBC3 * block, b
         int rgb_index = (block->rgb.indices >> (2 * i)) & 3;
         int alpha_index = 0; // @@ 
 
-        error += (alpha_blend ? (c.a * 1.0f/255.0f) : 1.0f) * evaluate_mse(rgb_palette[rgb_index], c);
-        error += square(int(alpha_palette[alpha_index]) - c.a);
+        error += (alpha_blend ? (c.a * 1.0f/255.0f) : 1.0f) * float(evaluate_mse(rgb_palette[rgb_index], c));
+        error += float(square(int(alpha_palette[alpha_index]) - c.a));
     }
     return error;
 }
