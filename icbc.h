@@ -19,6 +19,7 @@ namespace icbc {
     void init(Decoder decoder = Decoder_D3D10);
 
     enum Quality {
+        Quality_Level0,  // Box fit only.
         Quality_Level1,  // Box fit + least squares fit.
         Quality_Level2,  // Cluster fit 4, threshold = 24.
         Quality_Level3,  // Cluster fit 4, threshold = 32.
@@ -3662,10 +3663,14 @@ static Options setup_options(Quality level, bool enable_three_color_mode, bool e
     Options opt;
 
     switch (level) {
+        case Quality_Level0:            // Box fit only.
+            opt.box_fit = true;
+            opt.least_squares_fit = false;
+            break;
+
         case Quality_Level1:            // Box fit + least squares fit.
             opt.box_fit = true;
             opt.least_squares_fit = true;
-            opt.threshold = 1.0f / 256;
             break;
 
         case Quality_Level2:            // Cluster fit 4, threshold = 24.
