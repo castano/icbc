@@ -73,7 +73,7 @@ namespace ic {
 
 // Maximum thread count is fixed, but can be tweaked with this definition:
 #ifndef IC_MAX_THREAD_COUNT
-#define IC_MAX_THREAD_COUNT 32
+#define IC_MAX_THREAD_COUNT 64
 #endif
 
 #ifndef IC_THREAD_STACK_SIZE
@@ -612,6 +612,9 @@ int init_pfor(int worker_count, bool use_calling_thread) {
 
     if (worker_count <= 0) {
         worker_count = get_processor_count();
+    }
+    if (worker_count - use_calling_thread > IC_MAX_THREAD_COUNT) {
+        worker_count = IC_MAX_THREAD_COUNT + use_calling_thread;
     }
 
     pool.worker_count = worker_count;
