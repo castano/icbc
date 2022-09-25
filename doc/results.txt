@@ -56,6 +56,16 @@ Gulftown - vc2017/x64 - 2020/07/31
     SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 1.245808 (1.177381)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 2.440240 (2.320139)
 
+AMD Ryzen Threadripper 2990WX 32 Core 3000 MHz - 64 threads - vc2019/x64 - 2021/04/01
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.113936 (0.112231)
+    AVX1:   RMSE = 6.916    PSNR = 31.333   TIME = 0.147427 (0.145444)
+    SSE4:   RMSE = 6.916    PSNR = 31.333   TIME = 0.145169 (0.143220)
+    SSE2:   RMSE = 6.916    PSNR = 31.333   TIME = 0.154456 (0.152679)
+    Float:  RMSE = 6.916    PSNR = 31.333   TIME = 0.380457 (0.376875) | 0.347944 (0.342105)
+
+AMD Ryzen Threadripper 2990WX 32 Core 3000 MHz - 1 thread - vc2019/x64 - 2021/04/01 
+    AVX2:   RMSE = 6.916    PSNR = 31.333   TIME = 3.669385 (3.540881)
+
 Apple M1 Pro - 8+2 threads - clang 13.0 - 2022/01/11
     Neon:   RMSE = 6.916    PSNR = 31.333   TIME = 0.290521 (0.285169)
     Float:  RMSE = 6.916    PSNR = 31.333   TIME = 0.844785 (0.834892)
